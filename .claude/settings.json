@@ -1,0 +1,26 @@
+{
+  "env": {
+    "PROJECT_NAME": "nd-core",
+    "PROJECT_ROOT": "/home/me/Workspaces/night-district/nd-core",
+    "ORG_NAME": "night-district",
+    "ORG_DIR": "/home/me/Workspaces/night-district"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [".claude/hooks/pre-edit.sh"]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [".claude/hooks/knowledge-hook.sh"]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [".claude/hooks/maintenance-queue.sh"]
+      }
+    ]
+  }
+}
