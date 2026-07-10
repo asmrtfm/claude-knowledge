@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
+
+if [[ -f "${BASH_SOURCE[0]%\/*}/../.disabled_hooks" ]]; then
+  grep -qEv "\b(knowledge|$(basename "${BASH_SOURCE[0]}" .sh))\b" "${BASH_SOURCE[0]%\/*}/../.disabled_hooks" || exit 0
+fi
+
+
 # PostToolUse: logs file changes to MAINTENANCE_QUEUE with structured format.
 # Scrubs entries whose files didn't actually change (mtime unchanged).
 
-set -euo pipefail
 
 INPUT=$(cat)
 
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
 [[ -z "$FILE_PATH" ]] && exit 0
+
+# Don't queue edits to knowledge files themselves
+[[ "$FILE_PATH" != */.claude/knowledge/* ]] || exit 0
 
 TOOL_USE_ID=$(echo "$INPUT" | jq -r '.tool_use_id // empty' 2>/dev/null)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // "unknown"' 2>/dev/null)
@@ -29,13 +37,10 @@ fi
 
 MTIME_STAMP=$(date -d "@${POST_MTIME}" '+%Y%m%d_%H%M%S' 2>/dev/null || echo "$POST_MTIME")
 
-# Resolve the project-level knowledge directory
-QUEUE_FILE=""
-if [[ -n "${REPO_ROOT:-}" ]]; then
-  QUEUE_FILE="$REPO_ROOT/.claude/knowledge/MAINTENANCE_QUEUE"
-elif [[ -n "${PROJECT_ROOT:-}" ]]; then
-  QUEUE_FILE="$PROJECT_ROOT/.claude/knowledge/MAINTENANCE_QUEUE"
-fi
+. "${BASH_SOURCE[0]%/*}/lib/resolve-env.sh"
+_set_repo_root
+
+QUEUE_FILE="${REPO_ROOT:-$PROJECT_ROOT}/.claude/knowledge/MAINTENANCE_QUEUE"
 
 [[ -z "$QUEUE_FILE" || ! -d "$(dirname "$QUEUE_FILE")" ]] && exit 0
 

@@ -1,17 +1,16 @@
 ---
 name: knowledge
 description: Capture, query, and maintain project knowledge. Use to record architectural discoveries, gotchas, decisions, and domain concepts that are not obvious from reading the code.
-argument-hint: capture | maintain | <search query>
+argument-hint: capture | maintain | inspect | <search query>
 ---
+
+!`${CLAUDE_SKILL_DIR}/load-env.sh`
 
 ## Overview
 
-This skill manages a layered project knowledge system stored in `.claude/knowledge/` directories. Knowledge lives at two levels:
+This skill manages a project knowledge system stored in `.claude/knowledge/`. Knowledge lives at the project level (`$PROJECT_ROOT/.claude/knowledge/` or `$REPO_ROOT/.claude/knowledge/`).
 
-- **Org-level**: `$ORG_DIR/.claude/knowledge/` — cross-repo knowledge (entity naming, API contracts, how repos relate, platform conventions)
-- **Project-level**: `$PROJECT_ROOT/.claude/knowledge/` (or `$REPO_ROOT`) — implementation-specific knowledge (model gotchas, controller patterns, service behavior)
-
-Both levels share the same structure. When working in a project, both layers apply.
+If `$ORG_DIR` is set, an org-level layer is also checked at `$ORG_DIR/.claude/knowledge/` — useful for cross-repo knowledge like entity naming, API contracts, and platform conventions. Both layers share the same structure.
 
 ## Directory Structure
 
@@ -27,6 +26,7 @@ Both levels share the same structure. When working in a project, both layers app
     workflows/             # deploy steps, release process, manual procedures
     domain/                # business concepts that differ from what code suggests
   historical/              # obsolete entries, same structure as entries/
+  inspections/             # inspection logs (YYYYMMDD_HHMMSS.md)
   maintenance/             # archived maintenance logs (YYYYMMDD/HHMMSS_<session_id>.log)
 ```
 
@@ -35,6 +35,7 @@ Both levels share the same structure. When working in a project, both layers app
 Parse $ARGUMENTS:
 - If empty or `capture`: enter **Capture Mode** → read `skills/capture/SKILL.md`
 - If `maintain`: enter **Maintain Mode** → read `skills/maintain/SKILL.md`
+- If `inspect`: enter **Inspect Mode** → read `skills/inspect/SKILL.md`
 - Anything else: treat as a search query → enter **Query Mode** → read `skills/query/SKILL.md`
 
 $ARGUMENTS

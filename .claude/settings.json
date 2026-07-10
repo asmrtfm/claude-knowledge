@@ -8,18 +8,18 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": ".claude/hooks/knowledge/knowledge.sh", "shell": "bash"}]
+      },
+      {
         "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [".claude/hooks/pre-edit.sh"]
+        "hooks": [{"type": "command", "command": ".claude/hooks/knowledge/pre-edit.sh", "shell": "bash"}]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash",
-        "hooks": [".claude/hooks/knowledge-hook.sh"]
-      },
-      {
         "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [".claude/hooks/maintenance-queue.sh"]
+        "hooks": [{"type": "command", "command": ".claude/hooks/knowledge/maintenance-queue.sh", "shell": "bash"}]
       }
     ]
   }

@@ -2,6 +2,8 @@
 name: query
 ---
 
+!`${CLAUDE_SKILL_DIR}/../../load-env.sh`
+
 ## Query Mode
 
 Surface knowledge relevant to a search query or set of files.

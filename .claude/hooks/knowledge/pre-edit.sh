@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
+
+if [[ -f "${BASH_SOURCE[0]%\/*}/../.disabled_hooks" ]]; then
+  grep -qEv "\b(knowledge|$(basename "${BASH_SOURCE[0]}" .sh))\b" "${BASH_SOURCE[0]%\/*}/../.disabled_hooks" || exit 0
+fi
+
+
 # PreToolUse: records file mtime before edit so the PostToolUse hook
 # can detect whether the file actually changed.
-
-set -euo pipefail
 
 INPUT=$(cat)
 

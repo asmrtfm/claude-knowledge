@@ -2,14 +2,11 @@
 # Auto-fires on maintain mode invocation.
 # Sets up the maintenance log file and exports its path.
 
-KNOWLEDGE_DIR=""
-if [[ -n "$REPO_ROOT" ]]; then
-  KNOWLEDGE_DIR="$REPO_ROOT/.claude/knowledge"
-elif [[ -n "$PROJECT_ROOT" ]]; then
-  KNOWLEDGE_DIR="$PROJECT_ROOT/.claude/knowledge"
-fi
+# Resolve from two levels up: skills/knowledge/ -> hooks/knowledge/lib/
+. "${BASH_SOURCE[0]%/*}/../../hooks/knowledge/lib/resolve-env.sh"
+_set_repo_root
 
-[[ -z "$KNOWLEDGE_DIR" ]] && exit 0
+KNOWLEDGE_DIR="${REPO_ROOT:-$PROJECT_ROOT}/.claude/knowledge"
 
 STAMP=$(date '+%Y%m%d/%H%M%S')
 SESSION="${CLAUDE_SESSION_ID:-${SESSION_ID:-unknown}}"
