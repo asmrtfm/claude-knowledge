@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+# Prompt for a value with a default placeholder
+_prompt_value() {
+  local label="$1" default="$2" result
+  read -rep "  ${label} [${default}]: " result
+  echo "${result:-$default}"
+}
+
+_prompt_value "${@}"

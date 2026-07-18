@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-if [[ -f "${BASH_SOURCE[0]%\/*}/../.disabled_hooks" ]]; then
+if [[ -s "${BASH_SOURCE[0]%\/*}/../.disabled_hooks" ]]; then
   grep -qEv "\b(knowledge|$(basename "${BASH_SOURCE[0]}" .sh))\b" "${BASH_SOURCE[0]%\/*}/../.disabled_hooks" || exit 0
 fi
 
@@ -18,6 +18,5 @@ TOOL_USE_ID=$(echo "$INPUT" | jq -r '.tool_use_id // empty' 2>/dev/null)
 
 MTIME=$(stat -c %Y "$FILE_PATH" 2>/dev/null || echo "NEW")
 
-# Store pre-edit mtime keyed by tool_use_id
-mkdir -p /tmp/knowledge-hooks
-echo "$MTIME" > "/tmp/knowledge-hooks/${TOOL_USE_ID}.mtime"
+# Append pre-edit mtime to the shared log keyed by tool_use_id
+echo "${TOOL_USE_ID} ${MTIME}" >> "${BASH_SOURCE[0]%/*}/mtime.log"

@@ -2,10 +2,6 @@
 # Auto-fires on maintain mode invocation.
 # Sets up the maintenance log file and exports its path.
 
-# Resolve from two levels up: skills/knowledge/ -> hooks/knowledge/lib/
-. "${BASH_SOURCE[0]%/*}/../../hooks/knowledge/lib/resolve-env.sh"
-_set_repo_root
-
 KNOWLEDGE_DIR="${REPO_ROOT:-$PROJECT_ROOT}/.claude/knowledge"
 
 STAMP=$(date '+%Y%m%d/%H%M%S')

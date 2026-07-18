@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+# Merge hooks+permissions into a settings file without clobbering existing content
+_merge_hooks() {
+  local file="$1" with_hooks="$2"
+  local was_readonly=false
+  # Temporarily make writable if read-only
+  if [[ -f "$file" && ! -w "$file" ]]; then
+    was_readonly=true
+    chmod +w "$file"
+  fi
+  if [[ "$with_hooks" == true ]]; then
+    if [[ -f "$file" ]]; then
+      existing=$(cat "$file")
+      printf '%s' "$existing" | jq \
+        --argjson hooks "$hooks_json" \
+        --argjson perms "$permissions_json" \
+        '.hooks = (reduce ($hooks | to_entries[]) as $e (.hooks // {}; .[$e.key] = ((.[$e.key] // []) as $existing | $existing + [$e.value[] | select(.matcher as $m | [$existing[].matcher] | index($m) | not)]))) | .permissions.allow = (((.permissions // {}).allow // []) + ($perms - ((.permissions // {}).allow // [])))' \
+        > "$file"
+    else
+      jq -n --argjson hooks "$hooks_json" --argjson perms "$permissions_json" \
+        '{hooks:$hooks,permissions:{allow:$perms}}' > "$file"
+    fi
+  fi
+  if [[ "$was_readonly" == true ]]; then
+    chmod -w "$file"
+  fi
+}
+
+_merge_hooks "${@}"

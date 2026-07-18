@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-if [[ -f "${BASH_SOURCE[0]%\/*}/../.disabled_hooks" ]]; then
+# Short-circuit if disabled (this allows enabling|disabling mid-session)
+if [[ -s "${BASH_SOURCE[0]%\/*}/../.disabled_hooks" ]]; then
   grep -qEv "\b(knowledge|$(basename "${BASH_SOURCE[0]}" .sh))\b" "${BASH_SOURCE[0]%\/*}/../.disabled_hooks" || exit 0
 fi
 
@@ -14,23 +15,24 @@ INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
 [[ -z "$FILE_PATH" ]] && exit 0
 
-# Don't queue edits to knowledge files themselves
-[[ "$FILE_PATH" != */.claude/knowledge/* ]] || exit 0
+# Don't queue knowledge maintenance for files inside .claude/
+[[ "$FILE_PATH" != */.claude/* ]] || exit 0
 
 TOOL_USE_ID=$(echo "$INPUT" | jq -r '.tool_use_id // empty' 2>/dev/null)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // "unknown"' 2>/dev/null)
 SESSION_ID="${CLAUDE_SESSION_ID:-unknown}"
 
-# Check mtime against pre-edit snapshot
+# Check mtime against pre-edit snapshot from the shared log
 POST_MTIME=$(stat -c %Y "$FILE_PATH" 2>/dev/null || echo "NEW")
-PRE_MTIME_FILE="/tmp/knowledge-hooks/${TOOL_USE_ID}.mtime"
+MTIME_LOG="${BASH_SOURCE[0]%/*}/mtime.log"
 
-if [[ -f "$PRE_MTIME_FILE" ]]; then
-  PRE_MTIME=$(cat "$PRE_MTIME_FILE")
-  rm -f "$PRE_MTIME_FILE"
+if [[ -f "$MTIME_LOG" ]]; then
+  PRE_MTIME=$(grep "^${TOOL_USE_ID} " "$MTIME_LOG" 2>/dev/null | tail -1 | cut -d' ' -f2)
+  # Remove consumed entry
+  sed -i "/^${TOOL_USE_ID} /d" "$MTIME_LOG" 2>/dev/null
 
   # If mtime unchanged, file didn't actually change — skip
-  if [[ "$PRE_MTIME" == "$POST_MTIME" && "$PRE_MTIME" != "NEW" ]]; then
+  if [[ -n "$PRE_MTIME" && "$PRE_MTIME" == "$POST_MTIME" && "$PRE_MTIME" != "NEW" ]]; then
     exit 0
   fi
 fi

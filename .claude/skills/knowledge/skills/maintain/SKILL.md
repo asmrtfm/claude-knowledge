@@ -3,7 +3,8 @@ name: maintain
 ---
 
 !`${CLAUDE_SKILL_DIR}/../../load-env.sh`
-!`${CLAUDE_SKILL_DIR}/../../maintenance-log.sh`
+!`${CLAUDE_SKILL_DIR}/maintenance-log.sh`
+!`${CLAUDE_SKILL_DIR}/audit.sh`
 
 ## Maintain Mode
 

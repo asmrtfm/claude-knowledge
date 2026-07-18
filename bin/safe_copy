@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+
+# Copy src to dest, prompting if dest exists and differs
+_safe_copy() {
+  (($# > 1)) || { echo "[ERROR] At least two arguments required (<src> <dest>)" >&2; exit 1; }
+  local src dest
+  local -a CP_ARGS=()
+  for ((a=1;a<=$#;a++)); do
+    case "${!a}" in
+    \-*) CP_ARGS[${#CP_ARGS[@]}]="${!a}" ;;
+    *) [[ -n $src ]] && dest="${!a}" || src="${!a}"
+    esac
+  done
+  [[ -e "$src" ]] || { echo "[ERROR] Isn't real: '${src}'"; >&2; exit 1; }
+  if [[ -f "$dest" ]] && ! diff -w -q "$src" "$dest" &>/dev/null; then
+    echo "File exists and is different."
+    read -rep "  View diff? [y/N]: " viewdiff
+    if [[ "${viewdiff,,}" == @(y)?(es) ]]; then
+      diff --color -wu "$dest" "$src"
+      echo ""
+    fi
+    read -rep "  Overwrite $(basename "$dest")? [y/N]: " answer
+    [[ "${answer,,}" == @(y)?(es) ]] || return 0
+  fi
+  command cp ${CP_ARGS[*]} "$src" "$dest"
+}
+
+_safe_copy "${@}"

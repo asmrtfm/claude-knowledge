@@ -60,19 +60,24 @@ inspected: # date or "stale" — managed by inspect mode
 
 6. **Self-review against ground rules.** Read the draft back. Does it reference this session, a mistake you made, or a debugging path you took? If so, rewrite until it doesn't. The entry should read like documentation, not a postmortem.
 7. Save to `entries/<category>/<kebab-case-name>.md`
-8. Update `INDEX.md` — add or update lines for each file referenced in the entry's `files:` field.
+8. Update `INDEX.md` — for each file in the entry's `files:` field, run:
+   ```bash
+   knowledge link <source_file> <category/entry-name.md>
+   ```
+   This creates or appends to the source file's mapping and keeps the index sorted.
 
-### INDEX.md Format
+### INDEX.md Management
 
+Use the `knowledge` CLI to manage INDEX.md rather than editing it by hand:
+
+```bash
+knowledge link <source> <entry>           # link a source file to an entry
+knowledge unlink <source> <entry>         # unlink
+knowledge purge <entry>                   # remove entry from all sources
+knowledge rekey <old_path> <new_path>     # update after a file move
+knowledge list [-f json|yaml]             # view the index
+knowledge index sort                      # sort index alphabetically
 ```
-# Knowledge Map
-# source_file -> knowledge entries that reference it
-
-app/models/order.rb -> [architecture/order-lifecycle.md, gotchas/order-cache.md]
-app/controllers/concerns/persistable.rb -> [architecture/category-filtering.md]
-```
-
-One line per source file. Entries listed in brackets, comma-separated. Keep lines sorted alphabetically by source file path.
 
 ### Org-Level Knowledge (skip if `$ORG_DIR` is not set)
 

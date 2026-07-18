@@ -1,0 +1,563 @@
+#!/usr/bin/env bash
+
+shopt -s extglob
+
+if [[ "${1,,}" == *(\-)no?(\-|_)pager ]]; then
+  shift
+  PRESENTER=cat
+else
+  [[ "$PAGER" != ?(\")'false'?(\") ]] || PRESENTER=cat
+fi
+
+if [[ "$IMAROBOT" == ?(\")'true'?(\") ]]; then
+  PRESENTER=cat
+  JQARGS='-M'
+fi
+
+[[ -n "$PRESENTER" ]] || PRESENTER=${MANPAGER:-${PAGER:-cat}}
+
+
+# CLI for the claude-knowledge system.
+# Usage: knowledge <command> [args...]
+_usage() { $PRESENTER <<'INFO'
+COMMAND
+        knowledge — CLI for the claude-knowledge system
+
+SYNOPSIS
+        knowledge <SUBCOMMAND|OPTION> [TERTIARY_COMMAND|ARGUMENTS|OPTION] [ARGUMENTS|OPTION]
+
+DESCRIPTION
+        Manages knowledge hooks, INDEX.md file-to-entry mappings, and
+        installation for the claude-knowledge system.
+
+OPTIONS
+    --help, -h, help    Show this help text.
+
+COMMANDS
+    init [args...]               Install the knowledge system into a target project.
+    --reinstall-hooks [args...]  Reinstall hooks only.
+    --verify-settings [dir]        Check settings files against .envrc (default: pwd).
+
+    hooks                        Toggle which knowledge hooks are disabled via fzpick.
+
+    link <source> <entry>        Add <entry> to <source>'s bracket list.
+                                 Creates the source line if new. No-op if duplicate.
+
+    unlink <source> <entry>      Remove <entry> from <source>'s bracket list.
+                                 Deletes the line if it was the last entry.
+
+    show <path>                  Look up a source or entry; prints the other side.
+
+    purge <entry>                Remove <entry> from ALL source mappings.
+
+    rekey <old> <new>            Rename a source path, preserving entries.
+                                 Merges if <new> already exists.
+
+    list [--format|-f json|yaml] Print the index. Raw lines by default.
+
+    index sort                   Sort all data lines alphabetically by source path.
+
+INDEX.MD FORMAT
+        INDEX.md maps source files (paths relative to repo root) to the knowledge
+        entries that reference them (paths relative to entries/).
+
+           Entry:  <CATEGORY>/<TOPIC>.md
+
+          Format:  <source_file> -> [<entry1>, <entry2>, ...]
+
+         Examples:
+                  app/models/category.rb -> [domain/niche-scopes.md, relationships/phenotypes.md]
+                  package.json -> [architecture/dependencies.md, gotchas/version-pinning.md]
+
+INFO
+
+  exit ${1:-0}
+}
+[[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || _usage
+
+
+# Only needed for `init`
+# otherwise, we always operate under the assumption that either the user is running this command from their PROJECT_ROOT
+# or the model is calling it indirectly via one of our scripts or in maintenance mode - in both cases, any necessary ENV variables should already be set.
+SELF="$(realpath "${BASH_SOURCE[0]}")"
+SOURCE_DIR="${SELF%\/*}"
+
+# Resolve INDEX.md from the project's .claude/knowledge/ directory
+INDEX=".claude/knowledge/INDEX.md"
+
+# ─── Shared helpers ────────────────────────────────────────────────
+
+die() { echo "[ERROR] (knowledge): $*" >&2; exit 1; }
+
+# Extract individual entry paths from the bracket notation "[a, b, c]"
+_parse_entries() {
+  local bracket_content="$1"
+  echo "$bracket_content" | tr -d '[]' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$'
+}
+
+# Reassemble newline-separated entry paths back into "[a, b, c]" notation
+_format_entries() {
+  local entries="$1"
+  echo "[$(echo "$entries" | paste -sd ',' - | sed 's/,/, /g')]"
+}
+
+
+# Guard: index commands require INDEX.md to exist
+_require_index() { [[ -f "$INDEX" ]] || die "INDEX.md not found at $INDEX"; }
+
+
+# ── init ──
+cmd_init() { exec "$SOURCE_DIR/init.sh" "${@}"; }
+
+
+# ── hooks: toggle which hooks are disabled via fzpick ──
+cmd_hooks() {
+  local hooks_dir=".claude/hooks/knowledge"
+  local disabled_file=".claude/hooks/.disabled-hooks"
+
+  [[ -d "$hooks_dir" ]] || { echo "No hooks directory at $hooks_dir"; exit 1; }
+
+  # Collect hook basenames, build display items
+  local -a hooks=() items=()
+  for f in "$hooks_dir"/*.sh; do
+    [[ -f "$f" ]] || continue
+    local bn="$(basename "$f")"
+    hooks+=("$bn")
+    items+=("knowledge/$bn")
+  done
+  [[ ${#items[@]} -gt 0 ]] || { echo "No hook scripts found in $hooks_dir"; exit 1; }
+
+  # Read current disabled state
+  local -a disabled=()
+  local all_disabled=false
+  if [[ -f "$disabled_file" ]]; then
+    while IFS= read -r line; do
+      [[ -z "$line" || "$line" == \#* ]] && continue
+      if [[ "$line" == "knowledge" ]]; then
+        all_disabled=true
+        break
+      fi
+      disabled+=("$line")
+    done < "$disabled_file"
+  fi
+
+  # Build comma-separated pre-selected list for fzpick
+  local preselected=""
+  for h in "${hooks[@]}"; do
+    if [[ "$all_disabled" == true ]] || printf '%s\n' "${disabled[@]+"${disabled[@]}"}" | grep -qxF "$h"; then
+      preselected="${preselected:+$preselected,}knowledge/$h"
+    fi
+  done
+
+  # Run fzpick — selected items are the disabled hooks
+  local fzpick_args=(
+    --on="X" --off=" "
+    --header="Toggle hooks to disable  [X] = disabled"
+  )
+  [[ -z "$preselected" ]] || fzpick_args+=(--selected="$preselected")
+  fzpick_args+=("${items[@]}")
+
+  local output
+  output=$(fzpick "${fzpick_args[@]}") || true
+
+  # Write results to .disabled-hooks
+  if [[ -z "$output" ]]; then
+    rm -f "$disabled_file"
+    echo "All hooks enabled."
+    return
+  fi
+
+  local selected_count
+  selected_count=$(echo "$output" | wc -l)
+
+  mkdir -p "$(dirname "$disabled_file")"
+  if [[ "$selected_count" -eq "${#hooks[@]}" ]]; then
+    echo "knowledge" > "$disabled_file"
+    echo "All knowledge hooks disabled."
+  else
+    # Strip "knowledge/" prefix to store basenames
+    echo "$output" | sed 's|^knowledge/||' > "$disabled_file"
+    echo "Disabled hooks updated:"
+    sed 's/^/  /' "$disabled_file"
+  fi
+}
+
+# ── link: add entry to source mapping ─────────────────────────────
+# Adds <entry> to the mapping for <source_file>.
+# If the source already has a line, appends to its bracket list (no-op if duplicate).
+# If new, creates the line and re-sorts.
+cmd_link() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+SUBCOMMAND
+        link
+
+SYNOPSIS
+        knowledge link <source> <entry>
+
+DESCRIPTION
+        Add <entry> to <source>'s bracket list in INDEX.md.
+        Creates the source line if it doesn't exist. No-op if the mapping already exists.
+
+ARGUMENT
+        <source>    Source file path (relative to repo root)
+        <entry>     Knowledge entry path (relative to entries/)
+
+EXAMPLES
+        knowledge link app/models/order.rb domain/order-lifecycle.md
+        knowledge link package.json gotchas/version-pinning.md
+
+INFO
+    return 0; }
+  (($# == 2)) || die "usage: $0 link <source> <entry>"
+
+  _require_index
+  local src="$1" entry="$2"
+
+  if grep -q "^${src} -> " "$INDEX"; then
+    local existing
+    existing="$(grep "^${src} -> " "$INDEX" | sed "s/^${src//\//\\/} -> //")"
+
+    if echo "$existing" | tr -d '[]' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -qxF "$entry"; then
+      echo "already mapped: $src -> $entry"
+      return 0
+    fi
+
+    local entries
+    entries="$(_parse_entries "$existing")"
+    entries="$(printf '%s\n%s' "$entries" "$entry")"
+
+    local formatted
+    formatted="$(_format_entries "$entries")"
+    local src_esc="${src//\//\\/}"
+    local formatted_esc="${formatted//\//\\/}"
+    sed -i "s/^${src_esc} -> .*$/${src_esc} -> ${formatted_esc}/" "$INDEX"
+  else
+    echo "$src -> [$entry]" >> "$INDEX"
+    cmd_sort
+  fi
+  echo "added: $src -> $entry"
+}
+
+
+# ── unlink: remove entry from source mapping ──────────────────────
+# Removes <entry> from <source_file>'s bracket list.
+# Deletes the entire line if it was the last entry.
+cmd_unlink() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+SUBCOMMAND
+        unlink
+
+SYNOPSIS
+        knowledge unlink <source> <entry>
+
+DESCRIPTION
+        Remove <entry> from <source>'s bracket list in INDEX.md.
+        Deletes the source line entirely if it was the last entry.
+
+ARGUMENTS
+        <source>    Source file path (relative to repo root)
+        <entry>     Knowledge entry path (relative to entries/)
+
+EXAMPLE
+        knowledge unlink app/models/order.rb domain/order-lifecycle.md
+
+INFO
+    return 0; }
+  (($# == 2)) || die "usage: $0 unlink <source> <entry>"
+
+  _require_index
+  local src="$1" entry="$2"
+
+  if ! grep -q "^${src} -> " "$INDEX"; then
+    echo "no mapping for: $src"
+    return 0
+  fi
+
+  local existing
+  existing="$(grep "^${src} -> " "$INDEX" | sed "s/^${src//\//\\/} -> //")"
+  local entries
+  entries="$(_parse_entries "$existing" | grep -vxF "$entry")" || true
+
+  local src_esc="${src//\//\\/}"
+  if [ -z "$entries" ]; then
+    sed -i "/^${src_esc} -> /d" "$INDEX"
+    echo "removed line: $src"
+  else
+    local formatted
+    formatted="$(_format_entries "$entries")"
+    local formatted_esc="${formatted//\//\\/}"
+    sed -i "s/^${src_esc} -> .*$/${src_esc} -> ${formatted_esc}/" "$INDEX"
+    echo "removed: $src -> $entry"
+  fi
+}
+
+# ── purge: remove entry from all source mappings ──────────────────
+# Removes <entry> from every source file mapping that references it.
+cmd_purge() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+SUBCOMMAND
+        purge
+
+SYNOPSIS
+        knowledge purge <entry>
+
+DESCRIPTION
+        Remove <entry> from ALL source file mappings in INDEX.md.
+        Use when archiving or deleting a knowledge entry.
+
+ARGUMENTS
+        <entry>     Knowledge entry path (relative to entries/)
+
+EXAMPLE
+        knowledge purge gotchas/stale-cache.md
+
+INFO
+    return 0; }
+  (($# == 1)) || die "usage: $0 purge <entry>"
+
+  _require_index
+  local entry="$1"
+  local count=0
+
+  while IFS= read -r src; do
+    cmd_unlink "$src" "$entry"
+    ((count++))
+  done < <(grep -F "$entry" "$INDEX" | cut -d' ' -f1)
+
+  echo "purged $entry from $count source(s)"
+}
+
+# ── rekey: rename source path in index ─────────────────────────────
+# Renames a source file path in the index, keeping its entry list intact.
+# If <new_source> already exists, merges the entry lists (no duplicates).
+cmd_rekey() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+SUBCOMMAND
+        rekey
+
+SYNOPSIS
+        knowledge rekey <old> <new>
+
+DESCRIPTION
+        Rename a source file path in INDEX.md, preserving its entry list.
+        If <new> already exists, merges the entry lists (no duplicates). Re-sorts after.
+
+ARGUMENTS
+        <old>    Current source file path
+        <new>    New source file path
+
+EXAMPLE
+        knowledge rekey app/models/transaction.rb app/models/purchase.rb
+
+INFO
+    return 0; }
+  (($# == 2)) || die "usage: $0 rekey <old> <new>"
+
+  _require_index
+  local old_src="$1" new_src="$2"
+
+  if ! grep -q "^${old_src} -> " "$INDEX"; then
+    die "no mapping for: $old_src"
+  fi
+
+  local old_entries_raw
+  old_entries_raw="$(grep "^${old_src} -> " "$INDEX" | sed "s/^${old_src//\//\\/} -> //")"
+  local old_entries
+  old_entries="$(_parse_entries "$old_entries_raw")"
+
+  local old_esc="${old_src//\//\\/}"
+  sed -i "/^${old_esc} -> /d" "$INDEX"
+
+  if grep -q "^${new_src} -> " "$INDEX"; then
+    while IFS= read -r entry; do
+      cmd_link "$new_src" "$entry"
+    done <<< "$old_entries"
+  else
+    local formatted
+    formatted="$(_format_entries "$old_entries")"
+    echo "$new_src -> $formatted" >> "$INDEX"
+    cmd_sort
+  fi
+  echo "renamed: $old_src -> $new_src"
+}
+
+# ── list: print index contents ─────────────────────────────────────
+# Prints index contents. Raw by default, or as json/yaml with --format/-f.
+cmd_list() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+SUBCOMMAND
+        list
+
+SYNOPSIS
+        knowledge list [--format|-f json|yaml]
+
+DESCRIPTION
+        Print INDEX.md contents. Raw data lines by default.
+
+OPTIONS
+        --format, -f <fmt>    Output structured format: json or yaml
+                              * Extra args after json are passed to jq.
+
+EXAMPLES
+        knowledge list
+        knowledge list -f json
+        knowledge list --format=yaml
+        knowledge list -f json '.["app/models/order.rb"]'
+
+INFO
+    return 0; }
+  _require_index
+
+  # Parse --format / -f flag
+  local format=""
+  while (($# > 0)); do
+    case "$1" in
+    --format=*) format="${1#--format=}"; shift ;;
+    --format|-f) format="${2:?'--format requires a value'}"; shift 2 ;;
+    *) break ;;
+    esac
+  done
+
+  if [[ -z "$format" ]]; then
+    grep -v '^$' "$INDEX"
+  else
+    case "$format" in
+    json) {
+        echo '{'
+        grep -v '^$' "$INDEX" | head -n-1 | sed 's|^|\"|g;s|\s[\-][\>]\s|\"\:\ |g;s|\[|\[\"|g;s|[\,]\s*|\"\,\ \"|g;s|\s*\]|\"\]\,|g'
+        grep -v '^$' "$INDEX" | tail -n1 | sed 's|^|\"|g;s|\s[\-][\>]\s|\"\:\ |g;s|\[|\[\"|g;s|[\,]\s*|\"\,\ \"|g;s|\s*\]|\"\]|g'
+        echo '}'
+      } | jq "${@}" $JQARGS
+      # can passthrough remaining args to jq if needed.
+      ;;
+    yaml)
+      while IFS= read -r line; do
+        local src="${line%%[[:space:]]*}"
+        local entries_raw="${line#*\-\>+([[:space:]])}"
+        echo "${src}:"
+        _parse_entries "$entries_raw" | while IFS= read -r entry; do
+          echo "  - ${entry}"
+        done
+      done < <(grep -v '^$' "$INDEX" ) | yq "${@}" $JQARGS
+      # can passthrough remaining args to yq if needed.
+      ;;
+    *)
+      die "list: unknown format '$format' (expected: json, yaml, or omit)"
+    esac
+  fi
+}
+
+# ── show: lookup by source or entry ────────────────────────────────
+# Given a path, returns the other side of the mapping.
+# Source paths appear on the left of " -> ", entries appear inside brackets.
+cmd_show() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+SUBCOMMAND
+        show
+
+SYNOPSIS
+        knowledge show <path>
+
+DESCRIPTION
+        Look up a source file or entry in INDEX.md and print the other side of the mapping.
+        If <path> matches a source (left side), prints its entries.
+        If <path> matches an entry (inside brackets), prints the source files that reference it.
+
+ARGUMENTS
+        <path>    A source file path or knowledge entry path
+
+EXAMPLES
+        'knowledge show app/models/order.rb'        # prints entries linked to sourcefile
+        'knowledge show domain/order-lifecycle.md'  # prints sourcefiles linked to this entry
+
+INFO
+    return 0; }
+  (($# == 1)) || die "usage: $0 show <path>"
+
+  _require_index
+  local path="$1"
+
+  # Try as source file (left side of " -> ")
+  if grep -q "^${path} -> " "$INDEX"; then
+    grep "^${path} -> " "$INDEX" | sed "s/^${path//\//\\/} -> //" | tr -d '[]' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$'
+    return 0
+  fi
+
+  # Try as entry (inside brackets on the right side)
+  local sources
+  sources="$(grep -F "$path" "$INDEX" | while IFS= read -r line; do
+    local entries_part="${line#* -> }"
+    # Confirm it's an exact entry match, not a substring
+    if echo "$entries_part" | tr -d '[]' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -qxF "$path"; then
+      echo "${line%% -> *}"
+    fi
+  done)"
+
+  if [[ -n "$sources" ]]; then
+    echo "$sources"
+    return 0
+  fi
+
+  echo "no mapping found for: $path"
+  return 1
+}
+
+# ── Index: sort ────────────────────────────────────────────────────
+# Sorts all data lines alphabetically by source file path.
+cmd_sort() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+TERTIARY_COMMAND
+        index
+
+SYNOPSIS
+        knowledge index sort
+
+DESCRIPTION
+        Sort all INDEX.md data lines alphabetically by source file path.
+
+INFO
+    return 0; }
+
+  _require_index
+  local -i A=$(wc -l < "$INDEX")
+  local -i B=$(sort "$INDEX" | tee "${INDEX}.bak" | wc -l)
+  if [[ -s "${INDEX}.bak" && $A == $B ]]; then
+    command mv "${INDEX}.bak" "$INDEX"
+  else
+    echo "[ERROR] Failed to sort .claude/knowledge/INDEX.md (backup preserved at INDEX.md.bak)" >&2
+    return 2
+  fi
+}
+
+# ── Index dispatch (sort only) ──
+cmd_index() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+SUBCOMMAND
+        index
+
+SYNOPSIS
+        knowledge index <TERTIARY_COMMAND>
+
+DESCRIPTION
+        Interact with INDEX.md via various TERIARY_COMMANDS
+
+TERTIARY_COMMANDS
+        sort        Sort the INDEX.md (See: 'knowledge index sort --help')
+
+INFO
+    return 0; }
+  (($# != 0)) || die "usage: $0 index sort"
+  case "$1" in
+  sort) cmd_sort ;;
+  *) die "unknown index subcommand: '${1}' (try: link, unlink, purge, rekey, list)"
+  esac
+}
+
+
+# ── Dispatch ──
+case "$1" in
+init|hooks|link|unlink|list|show|rekey|purge|index) cmd_${1} "${@:2}" ;;
+--verify-settings) exec "$SOURCE_DIR/verify-settings.sh" "${@:2}" ;;
+--reinstall-hooks) exec "$SOURCE_DIR/init.sh" --hooks-only "${@:2}" ;;
+*) _usage 1
+esac

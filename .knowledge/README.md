@@ -6,10 +6,13 @@ A passive knowledge retrieval and maintenance tracking system for Claude Code se
 
 Two hooks sit on the Claude Code execution layer:
 
-1. **Knowledge Hook** — When the agent runs a search command (grep, find, rg, fd, ag, ack),
-   this hook extracts the search terms, checks the knowledge base for relevant entries, and
-   appends matches to the tool output. The agent sees prior knowledge exactly where it's
-   already looking, with zero interruption.
+1. **Pre-Search Hook** (`PreToolUse` on `Bash`) — When the agent is about to run a search
+   command (grep, find, rg), this hook runs the command early to get a file list. If the
+   command produced results, each file path is looked up in INDEX.md for mapped knowledge
+   entries. If the command produced zero results (no codebase matches at all), the fallback
+   re-runs the exact same command — same pattern, same flags — with the target path swapped
+   to each knowledge base's `entries/` directory. Any matches from either path are passed
+   via `additionalContext`. The original command always runs unmodified.
 
 2. **Maintenance Queue** — When files are created or edited (via Edit, Write, or NotebookEdit),
    this hook logs the file path and timestamp to `.maintenance-queue.log`. The queue builds
@@ -35,12 +38,20 @@ Two hooks sit on the Claude Code execution layer:
 
 .claude/
 ├── settings.json              # Hook registration config
-└── hooks/
-    ├── knowledge-hook.sh      # Search interception hook (PostToolUse → Bash)
-    ├── maintenance-queue.sh   # File change logger (PostToolUse → Edit|Write|NotebookEdit)
-    └── lib/
-        ├── parse-search.sh    # Extracts query terms from search commands
-        └── query-knowledge.sh # Scores and returns matching knowledge entries
+├── hooks/
+│   └── knowledge/
+│       ├── pre-search.sh      # Search interception (PreToolUse → Bash)
+│       ├── pre-edit.sh        # Pre-edit hook (PreToolUse → Edit|Write|NotebookEdit)
+│       ├── maintenance-queue.sh # File change logger (PostToolUse → Edit|Write|NotebookEdit)
+│       └── lib/
+│           ├── resolve-env.sh     # Resolves knowledge dirs from env/filesystem
+│           └── query-knowledge.sh # Scores and returns matching knowledge entries
+└── skills/
+    └── knowledge/
+        └── skills/
+            └── maintain/
+                ├── audit.sh       # Pre-maintenance file-existence audit
+                └── maintenance-log.sh # Maintenance session logging
 ```
 
 ## How Search Interception Works
@@ -49,25 +60,24 @@ Two hooks sit on the Claude Code execution layer:
 Agent runs: grep -rn "ActionCable" app/
                 │
                 ▼
-    knowledge-hook.sh (PostToolUse)
+    pre-search.sh (PreToolUse)
                 │
-                ├── Detects "grep" in command
-                ├── parse-search.sh extracts "ActionCable"
-                ├── query-knowledge.sh searches entries/*.md
-                │   ├── Tokenizes search terms
-                │   ├── Scores each entry by token overlap
-                │   └── Returns title, summary, tags, filename
+                ├── Detects recursive grep
+                ├── Runs command early with -l to get file paths
+                │
+                ├── If files found:
+                │   └── Look up each path in INDEX.md → mapped entries
+                │
+                ├── If zero files found:
+                │   └── Re-run same command with target path swapped
+                │       to each knowledge base's entries/ directory
                 │
                 ▼
-    Matching entries appended to grep output
-    ━━━ Knowledge Base Matches ━━━
-    • **ActionCable Channels** [1/1 tokens matched]
-      How real-time channels are structured in this app.
-      → actioncable-channels.md
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Matches (from either path) passed via additionalContext
+    Original command runs unmodified
 ```
 
-The agent sees the knowledge entries alongside the search results it was already reading.
+The agent sees knowledge entries alongside the search results it was already reading.
 No context switch, no meta-work, no interruption.
 
 ## Writing Knowledge Entries
