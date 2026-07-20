@@ -10,9 +10,10 @@ _load_settings_env
 _set_repo_root
 _set_org_dir
 
-[[ -z $REPO_NAME ]]    || echo "REPO_NAME=$REPO_NAME"
-[[ -z $REPO_ROOT ]]    || echo "REPO_ROOT=$REPO_ROOT"
-[[ -z $PROJECT_NAME ]] || echo "PROJECT_NAME=$PROJECT_NAME"
-[[ -z $PROJECT_ROOT ]] || echo "PROJECT_ROOT=$PROJECT_ROOT"
-[[ -z $ORG_NAME ]]     || echo "ORG_NAME=$ORG_NAME"
-[[ -z $ORG_DIR ]]      || echo "ORG_DIR=$ORG_DIR"
+# Export resolved vars so downstream scripts and hooks inherit them
+[[ -z $REPO_NAME ]]    || export REPO_NAME
+[[ -z $REPO_ROOT ]]    || export REPO_ROOT
+[[ -z $PROJECT_NAME ]] || export PROJECT_NAME
+[[ -z $PROJECT_ROOT ]] || export PROJECT_ROOT
+[[ -z $ORG_NAME ]]     || export ORG_NAME
+[[ -z $ORG_DIR ]]      || export ORG_DIR

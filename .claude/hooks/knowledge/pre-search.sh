@@ -157,8 +157,10 @@ if [[ "$ctx_json" != "{}" ]]; then
   else
     new_cmd="echo \"[COMMAND]:\"; echo \"$cmd\"; echo \"\"; echo \"[RESULTS]:\"; cat \"${to}.log\""
   fi
+  # additionalContext must be a string — serialize the JSON object
+  ctx_str=$(printf '%s' "$ctx_json" | jq -r 'to_entries | map("[\(.key)]\n\(.value | join("\n"))") | join("\n\n")')
   printf '%s' "$Input" | jq \
-    --argjson ctx "$ctx_json" \
+    --arg ctx "$ctx_str" \
     --arg nc "$new_cmd" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
