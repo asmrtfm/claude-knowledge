@@ -57,10 +57,14 @@ declare -g settings_permissions_allow='["Bash(*/.claude/skills/knowledge/load-en
 # JSON block defining which hooks fire on which Claude tool events
 _settings_hooks() { cat <<'HOOKS'
 { "PreToolUse": [
-  { "matcher": "Bash", "hooks": [{"type": "command", "command": "\"${REPO_ROOT:-${PROJECT_ROOT}}\"/.claude/hooks/knowledge/pre-search.sh", "shell": "bash"}] },
-  { "matcher": "Edit|Write|NotebookEdit", "hooks": [{"type": "command", "command": "\"${REPO_ROOT:-${PROJECT_ROOT}}\"/.claude/hooks/knowledge/pre-edit.sh", "shell": "bash"}] }
+  { "matcher": "Bash", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PreToolUse\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/pre-search.sh", "shell": "bash"}] },
+  { "matcher": "Edit|Write|NotebookEdit|Update", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PreToolUse\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/pre-edit.sh", "shell": "bash"}] }
 ], "PostToolUse": [
-  { "matcher": "Edit|Write|NotebookEdit", "hooks": [{"type": "command", "command": "\"${REPO_ROOT:-${PROJECT_ROOT}}\"/.claude/hooks/knowledge/maintenance-queue.sh", "shell": "bash"}] }
+  { "matcher": "Edit|Update|Write|NotebookEdit", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PostToolUse\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/maintenance-queue.sh", "shell": "bash"}] }
+], "PostToolUseFailure": [
+  { "matcher": "Bash|Edit|Update|Write", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PostToolUseFailure\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/maintenance-queue.sh", "shell": "bash"}] }
+], "PermissionDenied": [
+  { "matcher": "Write|Edit|Bash|Update", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PermissionDenied\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/maintenance-queue.sh", "shell": "bash"}] }
 ] }
 HOOKS
 }
@@ -213,7 +217,10 @@ PROMPT
 
 _check_frontmatter() {
   [[ ! -f "$1/incomplete-frontmatter.list" ]] || rm "$1/incomplete-frontmatter.list"
-  find "$1/entries" -name "*.md" -type f -exec grep -L -P "^(tags|category|inspected):" '{}' \; 2>/dev/null | tee "$1/incomplete-frontmatter.list" >/dev/null
+  local -a incomplete=()
+  while IFS= read -r entry; do
+    echo "$entry" >> "$1/incomplete-frontmatter.list"
+  done < <(find "$1/entries" -name "*.md" -type f -exec grep -L -P "^(tags|category|inspected):" '{}' \; 2>/dev/null)
 }
 
 _migration() {
@@ -262,12 +269,19 @@ _register_repo_in_org() {
   local org_env result
   org_env=$(jq -n --arg on "$org_name" '{ORG_NAME:$on, CLAUDE_SCOPE:"org"}') || {
     echo "[ERROR] failed to build org env JSON (org_name='$org_name')" >&2; return 1; }
+  # Also install the skill's permission rules here. An org-level session loads
+  # only the org's own settings, so rules written to the repo alone are inert
+  # when Claude is launched from the org directory.
   if [[ -s "$org_settings" ]]; then
-    result=$(jq --argjson env "$org_env" '.env = ((.env // {}) + $env)' "$org_settings") || {
+    result=$(jq --argjson env "$org_env" --argjson perms "$settings_permissions_allow" \
+      '.env = ((.env // {}) + $env)
+       | .permissions.allow = (((.permissions // {}).allow // []) + ($perms - ((.permissions // {}).allow // [])))' \
+      "$org_settings") || {
       echo "[ERROR] failed to merge env into $org_settings" >&2; return 1; }
     printf '%s\n' "$result" > "$org_settings"
   else
-    jq -n --argjson env "$org_env" '{env:$env}' > "$org_settings"
+    jq -n --argjson env "$org_env" --argjson perms "$settings_permissions_allow" \
+      '{env:$env, permissions:{allow:$perms}}' > "$org_settings"
   fi
 
   # settings.local.json: ORG_DIR + additionalDirectories (git-ignored, absolute paths)
@@ -304,11 +318,38 @@ _merge_hooks_and_env() {
   local result
   if [[ "$settings_file" == "$SETTINGS" ]]; then
     if [[ -s "$settings_file" ]]; then
+      # Merge hooks per lifecycle event by script identity.
+      # Within each event's hooks array, if an existing entry already calls
+      # the same script (matched by basename), replace it. Otherwise append.
       result=$(jq \
         --argjson env "$env_block" \
         --argjson hooks "$(_settings_hooks)" \
         --argjson perms "$settings_permissions_allow" \
-        '.env = ((.env // {}) + $env) | .hooks = (reduce ($hooks | to_entries[]) as $e (.hooks // {}; .[$e.key] = ((.[$e.key] // []) as $existing | $existing + [$e.value[] | select(.matcher as $m | [$existing[].matcher] | index($m) | not)]))) | .permissions.allow = (((.permissions // {}).allow // []) + ($perms - ((.permissions // {}).allow // [])))' "$settings_file")
+        '
+        # Extract script basename from a hook command string
+        def script_id: capture("/(?<s>[^/]+\\.sh)") | .s // "";
+
+        .env = ((.env // {}) + $env)
+        | .hooks = (
+            reduce ($hooks | to_entries[]) as $event (
+              .hooks // {};
+              .[$event.key] = (
+                (.[$event.key] // []) as $existing |
+                reduce ($event.value[]) as $new (
+                  $existing;
+                  ($new.hooks[0].command | script_id) as $sid |
+                  if ($sid != "" and (. | map(select(.hooks[0].command | test($sid))) | length > 0))
+                  then
+                    map(if (.hooks[0].command | test($sid)) then $new else . end)
+                  else
+                    . + [$new]
+                  end
+                )
+              )
+            )
+          )
+        | .permissions.allow = (((.permissions // {}).allow // []) + ($perms - ((.permissions // {}).allow // [])))
+        ' "$settings_file")
       [[ -n "$result" ]] && printf '%s\n' "$result" > "$settings_file"
     else
       jq -n --argjson env "$env_block" --argjson hooks "$(_settings_hooks)" --argjson perms "$settings_permissions_allow" '{env:$env,hooks:$hooks,permissions:{allow:$perms}}' > "$settings_file"
@@ -457,6 +498,11 @@ fi
 
 _establish_knowledge_dir
 
+# Resolve and create the local cache directory
+CLAUDE_LOCAL_CACHE="${CLAUDE_LOCAL_CACHE:="$(nearest --from "$TARGET" -d .claude)/cache"}"
+mkdir -p "$CLAUDE_LOCAL_CACHE"
+# Add cache path to local env (absolute path, git-ignored)
+local_env_json=$(printf '%s' "$local_env_json" | jq --arg clc "$CLAUDE_LOCAL_CACHE" '. + {CLAUDE_LOCAL_CACHE:$clc}')
 
 # settings.json gets portable env (names only); hooks only if user chose settings.json
 _merge_hooks_and_env "$TARGET/.claude/settings.json" "$env_json"
@@ -502,6 +548,7 @@ fi
       echo "export ORG_DIR=\"$ORG_DIR\""
     fi
   fi
+  echo "export CLAUDE_LOCAL_CACHE=\"$CLAUDE_LOCAL_CACHE\""
 } >> "$ENVRC_FILE"
 
 chmod +x "$ENVRC_FILE"

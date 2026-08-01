@@ -1,26 +1,50 @@
 {
   "env": {
-    "PROJECT_NAME": "nd-core",
-    "PROJECT_ROOT": "/home/me/Workspaces/night-district/nd-core",
-    "ORG_NAME": "night-district",
-    "ORG_DIR": "/home/me/Workspaces/night-district"
+    "REPO_NAME": "claude-knowledge",
+    "CLAUDE_SCOPE": "repo"
   },
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{"type": "command", "command": ".claude/hooks/knowledge/knowledge.sh", "shell": "bash"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${REPO_ROOT:-${PROJECT_ROOT}}\"/.claude/hooks/knowledge/pre-search.sh",
+            "shell": "bash"
+          }
+        ]
       },
       {
         "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [{"type": "command", "command": ".claude/hooks/knowledge/pre-edit.sh", "shell": "bash"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${REPO_ROOT:-${PROJECT_ROOT}}\"/.claude/hooks/knowledge/pre-edit.sh",
+            "shell": "bash"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [{"type": "command", "command": ".claude/hooks/knowledge/maintenance-queue.sh", "shell": "bash"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${REPO_ROOT:-${PROJECT_ROOT}}\"/.claude/hooks/knowledge/maintenance-queue.sh",
+            "shell": "bash"
+          }
+        ]
       }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(*/.claude/skills/knowledge/load-env.sh)",
+      "Bash(*/.claude/skills/knowledge/skills/maintain/maintenance-log.sh)",
+      "Bash(*/.claude/skills/knowledge/skills/maintain/audit.sh)",
+      "Bash(knowledge *)"
     ]
   }
 }

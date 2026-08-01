@@ -32,7 +32,7 @@ for entry in "$ENTRIES_DIR"/*.md "$ENTRIES_DIR"/**/*.md; do
   [[ $SCORE -eq 0 ]] && continue
 
   # Extract entry metadata
-  TAGS=$(grep -oP '(?<=tags:\s).*' "$entry" 2>/dev/null | head -1)
+  TAGS=$(grep -oP 'tags:\s+\K.*' "$entry" 2>/dev/null | head -1)
 
   echo "• ${entry#"$ENTRIES_DIR"/} [$SCORE/$TOTAL tokens matched]"
   [[ -n "$TAGS" ]] && echo "  tags: $TAGS"
