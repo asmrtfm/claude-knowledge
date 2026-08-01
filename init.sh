@@ -380,15 +380,21 @@ _merge_hooks_and_env() {
 
 # ── Determine install mode ──
 if [[ -z $MODE ]]; then
+  if [[ -n $PROJECT_NAME ]]; then
+    MODE="project"
+    export PROJECT_ROOT="$TARGET"
+  else
+    if [[ -n $REPO_NAME || -d "$TARGET/.git" ]]; then
+      MODE="repo"
+      export REPO_ROOT="$TARGET"
+    fi
+  fi
+fi
+
+if [[ "$*" == *'--org'* ]]; then
   if [[ -n $ORG_DIR ]]; then
     MODE="org"
     export ORG_DIR="$TARGET"
-  elif [[ -n $REPO_NAME || -d "$TARGET/.git" ]]; then
-    MODE="repo"
-    export REPO_ROOT="$TARGET"
-  elif [[ -n $PROJECT_NAME ]]; then
-    MODE="project"
-    export PROJECT_ROOT="$TARGET"
   fi
 fi
 

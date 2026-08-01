@@ -1,1 +1,0 @@
-class OrderChannel < ApplicationCable::Channel
