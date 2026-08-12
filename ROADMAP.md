@@ -2,6 +2,7 @@
 
 > Ideas, planned features, and architectural changes — discussed first, implemented when ready.
 
+
 ## Active
 
 - **Knowledge System Rebuild** — Rebuild the knowledge hook system incorporating
@@ -99,9 +100,14 @@
   FILE_INDEX.md check — the tool name in the queue entry provides the same signal
   without any mid-task interruption or context loading.
 
+
 ## Considering
 
 _Ideas we've talked through but haven't committed to yet._
+
+**For recursive greps with relevant knowledge entries:**
+ - Add the `-l` flag (if not already present) to the model's command before executing and cature the resulting filepaths into an array.  Present two structured results sections: `Knowledge Entries`, `Tool Results`.  This allows us to prevent any context explosions from giant tool outputs. Claude is already trained to basically just chain redirects and ipe through `head` or `tail` with an arbitrary number of scan-lines.  What might be more useful would be to write the array to a file, present any knowledge entries that popped up, but then give claude a high-level overview of the tool results (deduplicated list of dirnames of the tool results).  Claude probably has an idea of where the that which it seeks might be, at least when compared to other parent directories and so it could then think "I want to see the results from this directory and this directory, but these others are noise" - it responds with a structured request to view those entries which could be as simple as re-running the command only on those directories.  We could do some testing to determine how many lines of output a tool result would need to have before this becomes viable, but I suspect it would only be less than 20 because the name-of-the-game here is not purely token-maxing, it's attention-curating, or "context attenuation".
+
 
 ## Completed
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # Installs the knowledge system into a target project or org workspace.
-# Usage: install.sh [--repo | --org | --update] [target_dir]
-#        Defaults to current directory if no target given.
+# Usage: init.sh [--repo | --org | --update | --hooks-only] [target_dir]
+#        Defaults to current directory; mode is inferred if not specified.
 
 
 # ---------------------------
@@ -14,6 +14,22 @@ SOURCE_DIR="${SELF%\/*}"
 [[ -d "${SOURCE_DIR}/bin" ]] || exit 3
 # For helpers such as safe_copy and prompt_value
 PATH="${SOURCE_DIR}/bin:${PATH}"
+
+# Install `nearest` to a user bin directory if not already on PATH
+if ! command -v nearest >/dev/null 2>&1; then
+  if [[ -d "${HOME}/bin" ]]; then
+    _nearest_dest="${HOME}/bin"
+  elif [[ -d "${HOME}/.local/bin" ]]; then
+    _nearest_dest="${HOME}/.local/bin"
+  fi
+  if [[ -n "${_nearest_dest:-}" ]]; then
+    safe_copy -v "${SOURCE_DIR}/bin/nearest" "${_nearest_dest}/nearest"
+    chmod +x "${_nearest_dest}/nearest"
+    echo "  installed nearest → ${_nearest_dest}/nearest"
+  else
+    echo "[WARN] Neither ~/bin nor ~/.local/bin exist — skipping nearest install" >&2
+  fi
+fi
 
 
 # ---------------------------
@@ -28,7 +44,7 @@ declare -g TARGET=""
 declare -g SETTINGS=""
 
 # ---------------------------
-. "$SOURCE_DIR/.claude/hooks/knowledge/lib/resolve-env.sh"
+. "$SOURCE_DIR/hooks/knowledge/lib/resolve-env.sh"
 
 # Parse input args
 for ((a=1;a<=$#;a++)); do
@@ -60,6 +76,8 @@ _settings_hooks() { cat <<'HOOKS'
   { "matcher": "Bash", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PreToolUse\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/pre-search.sh", "shell": "bash"}] },
   { "matcher": "Edit|Write|NotebookEdit|Update", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PreToolUse\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/pre-edit.sh", "shell": "bash"}] }
 ], "PostToolUse": [
+  { "matcher": "Read", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PostToolUse\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/post-read.sh", "shell": "bash"}] },
+  { "matcher": "Write", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PostToolUse\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/post-write.sh", "shell": "bash"}] },
   { "matcher": "Edit|Update|Write|NotebookEdit", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PostToolUse\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/maintenance-queue.sh", "shell": "bash"}] }
 ], "PostToolUseFailure": [
   { "matcher": "Bash|Edit|Update|Write", "hooks": [{"type": "command", "command": "LIFECYCLE_EVENT_NAME=\"PostToolUseFailure\" \"${REPO_ROOT:-${PROJECT_ROOT:-.}}\"/.claude/hooks/knowledge/maintenance-queue.sh", "shell": "bash"}] }
@@ -73,16 +91,19 @@ HOOKS
 
 # ─────────────────────────────────────────────────────────────────────────────────
 _install_hooks() {
-  # Create hook directory tree and copy each hook script
+  # Copy all hooks and libs from the source hooks directory
   mkdir -p "$TARGET/.claude/hooks/knowledge/lib"
-  for hook in pre-search.sh pre-edit.sh maintenance-queue.sh; do
-    safe_copy -v "$SOURCE_DIR/.claude/hooks/knowledge/$hook" "$TARGET/.claude/hooks/knowledge/$hook"
-    chmod +x "$TARGET/.claude/hooks/knowledge/$hook"
+  local f
+  for f in "$SOURCE_DIR"/hooks/knowledge/*.sh; do
+    safe_copy -v "$f" "$TARGET/.claude/hooks/knowledge/${f##*/}"
   done
-  # Copy shared lib scripts (sourced by hooks, not executed directly)
-  for lib in resolve-env.sh query-knowledge.sh; do
-    safe_copy -v "$SOURCE_DIR/.claude/hooks/knowledge/lib/$lib" "$TARGET/.claude/hooks/knowledge/lib/$lib"
+  for f in "$SOURCE_DIR"/hooks/knowledge/lib/*.sh; do
+    safe_copy -v "$f" "$TARGET/.claude/hooks/knowledge/lib/${f##*/}"
   done
+  # Install .ignored only if target doesn't already have one
+  if [[ ! -f "$TARGET/.claude/hooks/knowledge/.ignored" ]]; then
+    safe_copy -v "$SOURCE_DIR/hooks/knowledge/.ignored" "$TARGET/.claude/hooks/knowledge/.ignored"
+  fi
   touch "$TARGET/.claude/hooks/.disabled_hooks"
 }
 
@@ -137,10 +158,7 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────────────
 _install_skill() {
-  if [[ "$TARGET" == "$SOURCE_DIR" ]]; then
-    echo "[ERROR] TARGET == SOURCE_DIR..." >&2
-    exit 1
-  fi
+
   mkdir -p "$TARGET/.claude/skills"
   if [[ -d "$TARGET/.claude/skills/knowledge" ]]; then
     echo "Knowledge Skill directory already exists: '$TARGET/.claude/skills/knowledge'"
@@ -152,9 +170,9 @@ _install_skill() {
     fi
     rm -rf "$TARGET/.claude/skills/knowledge"
   fi
-  command cp -r "$SOURCE_DIR/.claude/skills/knowledge" "$TARGET/.claude/skills/knowledge"
+  command cp -r "$SOURCE_DIR/skills/knowledge" "$TARGET/.claude/skills/knowledge"
   find "$TARGET/.claude/skills/knowledge" -type f -name "*.sh" -exec chmod +x '{}' \;
-  echo "  skills installed"
+  echo "  knowledge skill installed"
   tree "$TARGET/.claude/skills/knowledge"
 }
 
@@ -215,12 +233,32 @@ PROMPT
 
 }
 
+# An entry counts as migrated only when it has real YAML frontmatter carrying
+# all three of the newer fields. yq parses the frontmatter block itself, so a
+# legacy entry with a bare "tags: hooks knowledge" line in its body is not
+# mistaken for a migrated one.
+#   exit 0 + "true"   → all three keys present
+#   exit 0 + "false"  → no frontmatter block, or at least one key missing
+#   exit non-zero     → malformed YAML; incomplete, so it gets flagged for repair
+# 'inspected' may hold a null value; has() only cares that the key exists.
+_has_new_frontmatter() {
+  local result
+  result=$(yq --front-matter=extract \
+    'has("tags") and has("category") and has("inspected")' "$1" 2>/dev/null) || return 1
+  [[ "$result" == "true" ]]
+}
+
 _check_frontmatter() {
+  # Without yq every entry would be flagged incomplete, which reads as a
+  # migration failure rather than a missing dependency. Say which it is.
+  command -v yq >/dev/null || {
+    echo "[ERROR] yq not found — cannot inspect entry frontmatter in '$1'" >&2; return 1; }
+
   [[ ! -f "$1/incomplete-frontmatter.list" ]] || rm "$1/incomplete-frontmatter.list"
-  local -a incomplete=()
-  while IFS= read -r entry; do
-    echo "$entry" >> "$1/incomplete-frontmatter.list"
-  done < <(find "$1/entries" -name "*.md" -type f -exec grep -L -P "^(tags|category|inspected):" '{}' \; 2>/dev/null)
+  local entry
+  while IFS= read -r -d '' entry; do
+    _has_new_frontmatter "$entry" || echo "$entry" >> "$1/incomplete-frontmatter.list"
+  done < <(find "$1/entries" -name "*.md" -type f -print0 2>/dev/null)
 }
 
 _migration() {
@@ -234,7 +272,9 @@ _migration() {
     read -rep "Backfill missing fields (using claude -p)? [y/N]: " update_entries
     if [[ "${update_entries,,}" == y?(es) ]]; then
       printf '\n%s\n\n' "Summoning a claude to backfill missing frontmatter fields..."
-      claude --allowedTools "Edit,Write,Bash(yq *),Bash(find *)" -p "$(_migration_prompt "$KNOWLEDGE_DIR")"
+      # Shell-snapshot bug dumps exported functions into $() subshells, so the
+      # emitted prompt reaches claude on stdin instead of through -p.
+      claude -p --allowedTools "Edit,Write,Bash(yq *),Bash(find *)" < <(_migration_prompt "$KNOWLEDGE_DIR")
       echo ""
     fi
     printf '\n\n%s\n\n' "Checking claude's work..."
@@ -404,8 +444,6 @@ fi
 #   project: PROJECT_NAME, PROJECT_ROOT are set
 #   repo:    REPO_NAME, REPO_ROOT are set, optionally ORG_NAME + ORG_DIR
 
-echo "[DEBUG]  MODE: $MODE"
-# exit 0
 case "$MODE" in
 "org")
   # Org mode: dir is the target itself, just need the name
@@ -517,7 +555,6 @@ _merge_hooks_and_env "$TARGET/.claude/settings.json" "$env_json"
 _merge_hooks_and_env "$TARGET/.claude/settings.local.json" "$local_env_json"
 
 # Register this repo in the org's additionalDirectories so org-level Claude sessions can reach it
-echo "[DEBUG] MODE=$MODE ORG_DIR=$ORG_DIR REPO_ROOT=$REPO_ROOT REPO_NAME=$REPO_NAME"
 if [[ "$MODE" == "repo" && -n "$ORG_DIR" ]]; then
   _register_repo_in_org "$ORG_DIR" "$REPO_ROOT" "$REPO_NAME"
 fi

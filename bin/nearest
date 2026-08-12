@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+
+# Supported file-property flags:
+#
+# -b FILE    # FILE exists and is block special
+# -c FILE    # FILE exists and is character special
+# -d FILE    # FILE exists and is a directory
+# -e FILE    # FILE exists (deceptive. what this actually means is: "exists && is not a symlink")
+# -E FILE    # FILE exists OR is a symbolic link (regardless of live or dead link) (because that should still imply existance at the level of these sorts of tools)
+# -f FILE    # FILE exists and is a regular file
+# -g FILE    # FILE exists and is set-group-ID
+# -G FILE    # FILE exists and is owned by the effective group ID
+# -h FILE    # FILE exists and is a symbolic link (same as -L)
+# -k FILE    # FILE exists and has its sticky bit set
+# -L FILE    # FILE exists and is a symbolic link (same as -h)
+# -N FILE    # FILE exists and has been modified since it was last read
+# -O FILE    # FILE exists and is owned by the effective user ID
+# -p FILE    # FILE exists and is a named pipe
+# -r FILE    # FILE exists and read permission is granted
+# -s FILE    # FILE exists and has a size greater than zero
+# -S FILE    # FILE exists and is a socket
+# -t FD      # file descriptor FD is opened on a terminal
+# -u FILE    # FILE exists and its set-user-ID bit is set
+# -w FILE    # FILE exists and write permission is granted
+# -x FILE    # FILE exists and execute (or search) permission is granted
+
+[[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { ${PRESENTER:-cat} <<'INFO'
+USAGE
+    nearest <<[OPTION] PATH> ...>
+
+SYNOPSIS
+    For now, the last pair of -OPTION PATH overrides any priors within their scope
+    There are two scopes (See OPTIONS below)
+
+    Any remaining arguments are treated as (ostensibly the basenames of) the search targets.
+
+    WIP: if paths are piped (such as, for example, the output of find)
+         a reverse comparison is done as if to say "the nearest of these to [--from <FROM> | PWD]
+
+    ROADMAP: flags are applied at their natural position
+             - that is, target PATHs will have the most recently supplied
+               conditional flag applied during their call to `test`.
+
+            For now, last match wins, but once the above is true,
+            we will implement an `-n` flag to control the output limit
+            such that, for example, `-d TARGET_PATH_1 TARGET_PATH_2 -n 1`
+                                    would output the first match, whereas
+                                    for now, it would be the last.
+
+SCOPES
+    1    The starting point of the search.
+    2    Govern the condition that must pass in order to qualify as a match.
+
+OPTIONS
+    --from <PATH>             Where to begin searching upward from within.
+                              * Scope: 1
+
+    -[bcdefgGkLNOprsStuwx]    Every file property flag supported by the built-in test command.
+                              * Scope: 2
+
+    -E                        BOGO conditional alias ( [[ -e || -L ]] ).
+                              * Scope: 2
+
+
+INFO
+  exit 0
+}
+
+
+# ---------------------------------------------------
+# Because symbolic links - alive or dead - DO "exist"
+#     ( test -e  returns falsey for symbolic links ).
+#
+# -- BTW: not a disagreement with test -e behavior
+#                                 it's a primitive.
+#
+# ---------------------------------------------------
+#
+# Set the default test binary
+# * You might be wondering why this is necessary. After all,
+#    if we built and maintain our own extension of coreutils test command,
+#    then why not just put it a leading PATH prefix, or just "install" it
+#    to  /bin/test  and call it a day?
+# => Bash ships with coreutils `test` command baked-in.
+#    There are two options:
+#      (1) build custom bash literally for this one flag to the test command  (I do this myself, but wouldn't be reasonable to expect other to).
+#      (2) wrap it with a function like we do here:
+# ---------------------------------------------------
+#
+test='test'
+[[ ! -x "${HOME}/.local/bin/test" ]] || test="${HOME}/bin/test"
+[[ ! -x "${HOME}/bin/test" ]] || test="${HOME}/bin/test"
+_eLtest() { [[ -e "$2" || -L "$2" ]]; }
+_test() { ${test} $1 "$2"; }
+#
+# ---------------------------------------------------
+# DEBUGGING
+# echo "(\$test): $test"
+# ---------------------------------------------------
+
+
+declare -a target=()
+for ((a=1;a<=$#;a++)); do
+  case "${!a}" in
+  '--from') ((++a)); From="${!a}" ;;
+  \-[bcdefgGkLNOprsStuwx]) Test='_test'; fprop="${!a}" ;;
+  '-E') Test='_eLtest' ;;
+  *) target[${#target[@]}]="${!a}"
+  esac
+done
+
+
+From="$(realpath "${From:-$(pwd)}")"
+[[ -d "$From" ]] || exit 2
+
+
+match=""
+for ((i=0;i<${#target[@]};i++)); do
+  # if ${Test:="_eLtest"} ${fprop:="-E"} "${target[i]}"; then
+  #   realpath "${target[i]}"
+  #   exit 0
+  # fi
+  # else
+  candidate="$From"
+  while [[ "${candidate}/" != +(\/) ]]; do
+    if ${Test:="_eLtest"} ${fprop:="-E"} "${candidate}/${target[i]}"; then
+      realpath "${candidate}/${target[i]}"
+      exit 0
+    else
+      candidate="${candidate%\/*}"
+    fi
+  done
+  # fi
+done
+
+false

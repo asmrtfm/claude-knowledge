@@ -48,6 +48,8 @@ COMMANDS
 
     show <path>                  Look up a source or entry; prints the other side.
 
+    query <pattern>              Like show, but fuzzy: case-insensitive substring search.
+
     purge <entry>                Remove <entry> from ALL source mappings.
 
     rekey <old> <new>            Rename a source path, preserving entries.
@@ -94,6 +96,9 @@ _parse_entries() {
   local bracket_content="$1"
   echo "$bracket_content" | tr -d '[]' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$'
 }
+
+_matching_entries() { for ((a=2;a<=$#;a++)); do [[ "${!a}" != *${1}* ]] || echo "${!a}"; done; }
+
 
 # Reassemble newline-separated entry paths back into "[a, b, c]" notation
 _format_entries() {
@@ -502,6 +507,49 @@ INFO
   return 1
 }
 
+# ── query: fuzzy lookup by source or entry ────────────────────────
+# Like show, but uses case-insensitive substring matching instead of exact paths.
+# Searches both source paths and entry names, groups results by match side.
+cmd_query() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+SUBCOMMAND
+        query
+
+SYNOPSIS
+        knowledge query <pattern>
+
+DESCRIPTION
+        Fuzzy lookup in INDEX.md. Searches source file paths and entry names
+        for case-insensitive substring matches against <pattern>.
+
+        Unlike 'show' (which requires an exact path), 'query' finds all partial
+        matches and prints both sides of the mapping for each hit.
+
+ARGUMENTS
+        <pattern>    Substring to search for (case-insensitive)
+
+EXAMPLES
+        knowledge query order          # finds anything with "order" in path or entry
+        knowledge query lifecycle      # finds entries mentioning "lifecycle"
+        knowledge query \.rb           # grep pattern: all ruby source mappings
+
+INFO
+    return 0; }
+
+  (($# >= 1)) || die "usage: ${BASH_SOURCE[0]##*\/} query <pattern>  ( bash '[['-style patterns. )"
+  _require_index
+
+  local pattern="$1"
+  [[ "$pattern" != '*'* ]] || pattern="${pattern:1}"
+  [[ "$pattern" != *'*' ]] || pattern="${pattern:: -1}"
+
+  grep ' -> ' "$INDEX" | while IFS= read -r line; do
+    line="${line#*\ \-\>\ \[}"
+    line="${line:: -1}"
+    _matching_entries "$pattern" ${line//\,/${IFS}}
+  done | sort -u
+}
+
 # ── Index: sort ────────────────────────────────────────────────────
 # Sorts all data lines alphabetically by source file path.
 cmd_sort() {
@@ -556,7 +604,7 @@ INFO
 
 # ── Dispatch ──
 case "$1" in
-init|hooks|link|unlink|list|show|rekey|purge|index) cmd_${1} "${@:2}" ;;
+init|hooks|link|unlink|list|show|query|rekey|purge|index) cmd_${1} "${@:2}" ;;
 --verify-settings) exec "$SOURCE_DIR/verify-settings.sh" "${@:2}" ;;
 --reinstall-hooks) exec "$SOURCE_DIR/init.sh" --hooks-only "${@:2}" ;;
 *) _usage 1

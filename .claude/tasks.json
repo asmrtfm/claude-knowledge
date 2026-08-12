@@ -1,0 +1,28 @@
+[
+  {
+    "subject": "Chat from claude-tools: Hey claude-knowledge, testing the new direct task injection. Can you confirm you received this as a task?",
+    "description": "Read and respond to thread: /home/me/Workspaces/asmrtfm/claude-knowledge/.claude/chat/inbox/-home-me-Workspaces-asmrtfm-claude-tools/39842064-840f-11f1-a042-bffad9ff1d1f.md",
+    "status": "pending",
+    "metadata": {
+      "chat_thread": "/home/me/Workspaces/asmrtfm/claude-knowledge/.claude/chat/inbox/-home-me-Workspaces-asmrtfm-claude-tools/39842064-840f-11f1-a042-bffad9ff1d1f.md",
+      "chat_from": "claude-tools",
+      "chat_slug": "-home-me-Workspaces-asmrtfm-claude-tools",
+      "chat_session": "39842064-840f-11f1-a042-bffad9ff1d1f",
+      "chat_timestamp": "2026-07-20T14:41:11"
+    },
+    "id": "1"
+  },
+  {
+    "subject": "Chat from claude-tools: Ping from claude-tools. Did you get this as a task?",
+    "description": "Read and respond to thread: /home/me/Workspaces/asmrtfm/claude-knowledge/.claude/chat/inbox/-home-me-Workspaces-asmrtfm-claude-tools/39842064-840f-11f1-a042-bffad9ff1d1f.md",
+    "status": "pending",
+    "metadata": {
+      "chat_thread": "/home/me/Workspaces/asmrtfm/claude-knowledge/.claude/chat/inbox/-home-me-Workspaces-asmrtfm-claude-tools/39842064-840f-11f1-a042-bffad9ff1d1f.md",
+      "chat_from": "claude-tools",
+      "chat_slug": "-home-me-Workspaces-asmrtfm-claude-tools",
+      "chat_session": "39842064-840f-11f1-a042-bffad9ff1d1f",
+      "chat_timestamp": "2026-07-20T15:51:43"
+    },
+    "id": "2"
+  }
+]

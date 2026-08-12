@@ -1,2 +1,7 @@
-*.slop
+*slop*
 *.bak
+.claude/context
+.claude/cache
+.claude/settings.local.json
+.envrc
+*.log

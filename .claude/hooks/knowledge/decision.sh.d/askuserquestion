@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+# ---------------------------------------------------------------------------------
+# ##### AskUserQuestion
+#
+# Asks the user one to four multiple-choice questions.
+#
+# | Field       | Type   | Example                                                                                                            | Description                                                                                                                                                                                      |
+# | :---------- | :----- | :----------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+# | `questions` | array  | `[{"question": "Which framework?", "header": "Framework", "options": [{"label": "React"}], "multiSelect": false}]` | Questions to present, each with a `question` string, short `header`, `options` array, and optional `multiSelect` flag                                                                            |
+# | `answers`   | object | `{"Which framework?": "React"}`                                                                                    | Optional. Maps question text to the selected option label. Multi-select answers join labels with commas. Claude does not set this field; supply it via `updatedInput` to answer programmatically |
+#
+# ##### ExitPlanMode
+#
+# Presents a plan and asks the user to approve it before Claude leaves [plan mode](/en/permission-modes#analyze-before-you-edit-with-plan-mode). Claude writes the plan to a file on disk before calling the tool, so the literal `tool_input` from the model only carries `allowedPrompts`. Claude Code injects the plan content and file path before passing the input to hooks.
+#
+# | Field            | Type   | Example                                     | Description                                                                                                                                             |
+# | :--------------- | :----- | :------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------ |
+# | `plan`           | string | `"## Refactor auth\n1. Extract..."`         | Plan content in Markdown. Injected from the plan file on disk                                                                                           |
+# | `planFilePath`   | string | `"/Users/.../plans/refactor-auth.md"`       | Path to the plan file. Injected                                                                                                                         |
+# | `allowedPrompts` | array  | `[{"tool": "Bash", "prompt": "run tests"}]` | Optional. Prompt-based permissions Claude is requesting to implement the plan, each with a `tool` name and a `prompt` describing the category of action |
+#
+# In `PostToolUse`, `tool_response` is an object with `plan` and `filePath` fields holding the approved plan, plus internal status flags. Read `tool_response.plan` for the plan content rather than re-reading the file from disk.
+#
+# ---------------------------------------------------------------------------------
+
+# ── Available environment variables ──────────────────────────────────────────
+# CLAUDE_PROJECT_DIR    — project root
+# CLAUDE_PLUGIN_ROOT    — plugin installation directory (plugin hooks only)
+# CLAUDE_PLUGIN_DATA    — plugin persistent data directory (plugin hooks only)
+# CLAUDE_CODE_REMOTE    — "true" in remote web environments, unset in local CLI
+# CLAUDE_EFFORT         — active effort level (low|medium|high|xhigh|max)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ---------------------------------------------------------------------------------
+#   {
+#     "PostToolUse": [
+#       {
+#         "matcher": "AskUserQuestion",
+#         "hooks": [
+#           {
+#             "type": "command",
+#             "command": ""$CLAUDE_PROJECT_DIR"/.claude/hooks/post_tool_use.d/askuserquestion.sh"
+#           }
+#         ]
+#       }
+#     ]
+#   }
+# ---------------------------------------------------------------------------------
+
+# INPUT=$(cat)
+
+cat >> "${HOME}/.claude/hooks/logs/post_tool_use.d/askuserquestion/$(date '+%Y%m%d%H%M%S').json"
+

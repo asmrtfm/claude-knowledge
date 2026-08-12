@@ -31,6 +31,9 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 
+_good() { printf '\t%b%s%b %s\n' '\033[1;38;2;69;255;138m' '✓' '\033[0m' "$*"; }
+_bad() { printf '\t%b%s%b %s\n' '\033[1;38;2;255;69;42m' '✗' '\033[0m' "$*"; }
+
 # ─────────────────────────────────────────────────────────────────────────────────
 _vfail=0
 
@@ -40,9 +43,9 @@ _chk() {
   local actual
   actual=$(jq -r "$query" "$file" 2>/dev/null)
   if [[ "$actual" == "$expected" ]]; then
-    echo "  ✓ $label"
+    _good "$label"
   else
-    echo "  ✗ $label (expected: $expected, got: $actual)"
+    _bad "$label (expected: $expected, got: $actual)"
     ((_vfail++)) || true
   fi
 }
@@ -51,9 +54,9 @@ _chk() {
 _chk_contains() {
   local label="$1" needle="$2" file="$3" query="$4"
   if jq -e "$query" "$file" 2>/dev/null | grep -qF "$needle"; then
-    echo "  ✓ $label"
+    _good "$label"
   else
-    echo "  ✗ $label (expected to contain: $needle)"
+    _bad "$label (expected to contain: $needle)"
     ((_vfail++)) || true
   fi
 }
@@ -87,13 +90,14 @@ case "$MODE" in
   *)       _chk "settings.local.json: REPO_ROOT" "$REPO_ROOT" "$_sl" '.env.REPO_ROOT' ;;
 esac
 
-# Knowledge hook commands present in the chosen settings file
-_hook_cmds=$(jq -r '[.hooks.PreToolUse[]?.hooks[]?.command, .hooks.PostToolUse[]?.hooks[]?.command] | .[]' "$SETTINGS" 2>/dev/null)
-for _script in pre-search.sh pre-edit.sh maintenance-queue.sh; do
-  if echo "$_hook_cmds" | grep -qF "knowledge/$_script"; then
-    echo "  ✓ ${SETTINGS##*/}: $_script hook"
+# Verify each installed hook script is referenced in settings
+_hook_cmds=$(jq -r '[.hooks[]?[]?.hooks[]?.command // empty] | .[]' "$SETTINGS" 2>/dev/null)
+for _script in "$TARGET/.claude/hooks/knowledge"/*.sh; do
+  _name="${_script##*/}"
+  if echo "$_hook_cmds" | grep -qF "knowledge/$_name"; then
+    _good "${SETTINGS##*/}: $_name hook"
   else
-    echo "  ✗ ${SETTINGS##*/}: $_script hook missing"
+    _bad "${SETTINGS##*/}: $_name hook missing from settings"
     ((_vfail++)) || true
   fi
 done
@@ -115,9 +119,8 @@ if [[ "$MODE" == "repo" && -n "$ORG_DIR" ]]; then
 fi
 
 if ((_vfail > 0)); then
-  echo ""
-  echo "  ⚠ $_vfail verification(s) failed — review settings files"
+  printf '\n%b%s%b %s\n' '\033[1;38;2;240;138;69m' '✗' '\033[0m' '⚠' "$_vfail verification(s) failed — review settings files"
 else
   echo ""
-  echo "  all checks passed"
+  echo " All checks passed"
 fi
