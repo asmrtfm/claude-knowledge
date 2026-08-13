@@ -46,6 +46,10 @@ declare -g SETTINGS=""
 # ---------------------------
 . "$SOURCE_DIR/hooks/knowledge/lib/resolve-env.sh"
 
+# Clear any env vars inherited from the caller's shell (e.g. a loaded .envrc
+# from another project). init.sh must derive everything fresh from TARGET.
+unset REPO_NAME REPO_ROOT ORG_NAME ORG_DIR PROJECT_NAME PROJECT_ROOT CLAUDE_SCOPE
+
 # Parse input args
 for ((a=1;a<=$#;a++)); do
   case "${!a}" in
@@ -216,16 +220,15 @@ You are updating knowledge entry frontmatter in ${1}/entries/
 Do not read or edit files that are not mentioned in ${1}/incomplete-frontmatter.list
 For each .md entry that IS on that list:
 1. Read the file's YAML frontmatter (between the first pair of '---' delimiters at top of file)
-2. If either of the following two fields are missing, add them with sensible values derived ONLY from the entry's existing content — do NOT explore the codebase:
-   - category: infer from the entry's subdirectory name
+2. Populate the following fields with sensible values derived ONLY from the entry's existing content — do NOT explore the codebase:
    - tags: 2-4 keywords based on the entry's title and body text
-3. If "inspected" is missing, just add the key, not a value:
-   - inspected: do not add a value, only add the attribute if missing
-4. Do NOT modify created, updated, or inspected timestamps that already exist
-5. Do NOT change the entry body content
-6. Do NOT read or edit any files not on the list or that are outside of ${1}/entries/
-7. Use yq to update frontmatter in place:
+   - files: source file paths (relative to repo root) that the entry is about
+3. Do NOT modify created, updated, or inspected timestamps that already exist
+4. Do NOT change the entry body content
+5. Do NOT read or edit any files not on the list or that are outside of ${1}/entries/
+6. Use yq to update frontmatter in place:
    yq --front-matter=process '.tags = ["keyword1", "keyword2"]' -i <file>
+   yq --front-matter=process '.files = ["path/to/file.rb"]' -i <file>
 
 Process every entry. When you are finished, just say "done".
 
@@ -234,17 +237,17 @@ PROMPT
 }
 
 # An entry counts as migrated only when it has real YAML frontmatter carrying
-# all three of the newer fields. yq parses the frontmatter block itself, so a
+# all four of the required fields. yq parses the frontmatter block itself, so a
 # legacy entry with a bare "tags: hooks knowledge" line in its body is not
 # mistaken for a migrated one.
-#   exit 0 + "true"   → all three keys present
+#   exit 0 + "true"   → all four keys present
 #   exit 0 + "false"  → no frontmatter block, or at least one key missing
 #   exit non-zero     → malformed YAML; incomplete, so it gets flagged for repair
 # 'inspected' may hold a null value; has() only cares that the key exists.
 _has_new_frontmatter() {
   local result
   result=$(yq --front-matter=extract \
-    'has("tags") and has("category") and has("inspected")' "$1" 2>/dev/null) || return 1
+    'has("tags") and has("category") and has("inspected") and has("files")' "$1" 2>/dev/null) || return 1
   [[ "$result" == "true" ]]
 }
 
@@ -261,6 +264,32 @@ _check_frontmatter() {
   done < <(find "$1/entries" -name "*.md" -type f -print0 2>/dev/null)
 }
 
+# Adds missing frontmatter keys that can be derived without AI.
+# category gets a real value from the subdirectory name.
+# files, tags, inspected get empty keys for Claude or inspect mode to fill later.
+# Never overwrites a key that already exists.
+_backfill_scriptable_fields() {
+  # The entry file to update
+  local entry="$1"
+  # Derive category from subdirectory: entries/<category>/foo.md
+  local rel="${entry##*/entries/}"
+  # Strip filename to get just the category name
+  local category="${rel%%/*}"
+  # Check which keys are missing
+  local has_files has_category has_tags has_inspected
+  has_files=$(yq --front-matter=extract 'has("files")' "$entry" 2>/dev/null) || has_files="false"
+  has_category=$(yq --front-matter=extract 'has("category")' "$entry" 2>/dev/null) || has_category="false"
+  has_tags=$(yq --front-matter=extract 'has("tags")' "$entry" 2>/dev/null) || has_tags="false"
+  has_inspected=$(yq --front-matter=extract 'has("inspected")' "$entry" 2>/dev/null) || has_inspected="false"
+  # Add missing keys in template order: files, category, tags, inspected
+  [[ "$has_files" == "true" ]] || yq --front-matter=process '.files = ~' -i "$entry"
+  [[ "$has_category" == "true" ]] || yq --front-matter=process ".category = \"$category\"" -i "$entry"
+  [[ "$has_tags" == "true" ]] || yq --front-matter=process '.tags = ~' -i "$entry"
+  [[ "$has_inspected" == "true" ]] || yq --front-matter=process '.inspected = ~' -i "$entry"
+  # yq writes null as '~' — strip it so the output is just bare keys (e.g. 'tags:')
+  sed -i -E 's/^(tags|files|inspected): \~$/\1:/' "$entry"
+}
+
 _migration() {
   [[ -d "$1" ]] || return 0
   local KNOWLEDGE_DIR="$1"
@@ -268,26 +297,19 @@ _migration() {
 
   _check_frontmatter "$KNOWLEDGE_DIR"
   if [[ -s "$KNOWLEDGE_DIR/incomplete-frontmatter.list" ]]; then
-    printf '\n  %s\n\n' "$(wc -l < "$KNOWLEDGE_DIR/incomplete-frontmatter.list") entries missing new frontmatter fields (tags, category, inspected)."
-    read -rep "Backfill missing fields (using claude -p)? [y/N]: " update_entries
-    if [[ "${update_entries,,}" == y?(es) ]]; then
-      printf '\n%s\n\n' "Summoning a claude to backfill missing frontmatter fields..."
-      # Shell-snapshot bug dumps exported functions into $() subshells, so the
-      # emitted prompt reaches claude on stdin instead of through -p.
-      claude -p --allowedTools "Edit,Write,Bash(yq *),Bash(find *)" < <(_migration_prompt "$KNOWLEDGE_DIR")
-      echo ""
-    fi
-    printf '\n\n%s\n\n' "Checking claude's work..."
-    _check_frontmatter "$KNOWLEDGE_DIR"
-    if [[ -s "$KNOWLEDGE_DIR/incomplete-frontmatter.list" ]]; then
-      printf '\n%b%s%b %s\n%b%s%b %s\n\n%s\n[\e[3m%s\e[0m](\e[0;38;2;69;138;255m%s\e[0m)\n\n' \
-        '\e[1;3;38;2;180;69;240m' 'Anomylous activity' '\e[0m' \
-        "detected in '$KNOWLEDGE_DIR/incomplete-frontmatter.list'" \
-        '\e[1;3;37m' 'Remain calm.' '\e[0m' 'Avoid eye-lid blinking to the best of your ability.' \
-        'Contact your nearest Knowledge Brigade Agency handler as soon as possible.' \
-        'KBA Contact Form' 'https://github.com/asmrtfm/claude-knowledge/issues'
-    else
-      echo "Everything seems in order."
+    # Backfill scriptable fields (category value, empty keys for files/tags/inspected)
+    local entry
+    while IFS= read -r entry; do
+      _backfill_scriptable_fields "$entry"
+    done < "$KNOWLEDGE_DIR/incomplete-frontmatter.list"
+    # Print the prompt once for the user to paste into their next Claude session
+    if [[ -z "$_MIGRATION_PROMPTED" ]]; then
+      printf '\n  %s\n\n' "Some entries still need tags and files values."
+      printf '%s\n\n' "Give your next Claude session the following prompt:"
+      echo "─────────────────────────────────────────────────"
+      _migration_prompt "$KNOWLEDGE_DIR"
+      echo "─────────────────────────────────────────────────"
+      _MIGRATION_PROMPTED=1
     fi
   fi
 }
@@ -464,8 +486,8 @@ case "$MODE" in
     _set_org_dir 2>/dev/null || true
     if [[ -z $ORG_DIR ]]; then
       ORG_DIR="$(dirname "${REPO_ROOT:-$TARGET}")"
-      ORG_NAME="${ORG_DIR##*/}"
     fi
+    [[ -n $ORG_NAME ]] || ORG_NAME="${ORG_DIR##*/}"
     read -rep "  Does this repo belong to an org that will use claude-knowledge? [y/N]: " use_org
     if [[ "${use_org,,}" == y?(es) ]]; then
       ORG_NAME=$(prompt_value "ORG_NAME" "$ORG_NAME")

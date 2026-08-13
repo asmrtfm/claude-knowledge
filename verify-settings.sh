@@ -92,7 +92,7 @@ esac
 
 # Verify each installed hook script is referenced in settings
 _hook_cmds=$(jq -r '[.hooks[]?[]?.hooks[]?.command // empty] | .[]' "$SETTINGS" 2>/dev/null)
-for _script in "$TARGET/.claude/hooks/knowledge"/*.sh; do
+for _script in "${SOURCE_DIR:=${BASH_SOURCE[0]%/*}}"/hooks/knowledge/*.sh; do
   _name="${_script##*/}"
   if echo "$_hook_cmds" | grep -qF "knowledge/$_name"; then
     _good "${SETTINGS##*/}: $_name hook"
