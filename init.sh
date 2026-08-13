@@ -287,7 +287,7 @@ _backfill_scriptable_fields() {
   [[ "$has_tags" == "true" ]] || yq --front-matter=process '.tags = ~' -i "$entry"
   [[ "$has_inspected" == "true" ]] || yq --front-matter=process '.inspected = ~' -i "$entry"
   # yq writes null as '~' — strip it so the output is just bare keys (e.g. 'tags:')
-  sed -i -E 's/^(tags|files|inspected): \~$/\1:/' "$entry"
+  sed -i -E 's/^(tags|files|inspected): (\~|null)$/\1:/' "$entry"
 }
 
 _migration() {
