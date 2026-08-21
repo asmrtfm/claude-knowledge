@@ -48,16 +48,16 @@ COMMANDS
 
     show <path>                  Look up a source or entry; prints the other side.
 
-    query <pattern>              Like show, but fuzzy: case-insensitive substring search.
-
     purge <entry>                Remove <entry> from ALL source mappings.
 
     rekey <old> <new>            Rename a source path, preserving entries.
                                  Merges if <new> already exists.
 
-    list [--format|-f json|yaml] Print the index. Raw lines by default.
+    sort                         Sort all index data lines alphabetically by source path.
 
-    index sort                   Sort all data lines alphabetically by source path.
+    index list [-f json|yaml]    Print the index. Raw lines by default.
+
+    entries list [pattern] [-f]  List entry files with frontmatter metadata.
 
 INDEX.MD FORMAT
         INDEX.md maps source files (paths relative to repo root) to the knowledge
@@ -97,7 +97,21 @@ _parse_entries() {
   echo "$bracket_content" | tr -d '[]' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$'
 }
 
-_matching_entries() { for ((a=2;a<=$#;a++)); do [[ "${!a}" != *${1}* ]] || echo "${!a}"; done; }
+# _matching_entries() { for ((a=2;a<=$#;a++)); do [[ "${!a}" != *${1}* ]] || echo "${!a}"; done; }
+
+# # Fuzzy entry lookup — searches INDEX.md entry names for substring matches.
+# # Extracted from the former top-level `query` command.
+# _query_entries() {
+#   local pattern="$1"
+#   [[ "$pattern" != '*'* ]] || pattern="${pattern:1}"
+#   [[ "$pattern" != *'*' ]] || pattern="${pattern:: -1}"
+#
+#   grep ' -> ' "$INDEX" | while IFS= read -r line; do
+#     line="${line#*\ \-\>\ \[}"
+#     line="${line:: -1}"
+#     _matching_entries "$pattern" ${line//\,/${IFS}}
+#   done | sort -u
+# }
 
 
 # Reassemble newline-separated entry paths back into "[a, b, c]" notation
@@ -386,71 +400,162 @@ INFO
   echo "renamed: $old_src -> $new_src"
 }
 
-# ── list: print index contents ─────────────────────────────────────
-# Prints index contents. Raw by default, or as json/yaml with --format/-f.
-cmd_list() {
+
+
+# ── Entries: list — list entry files with frontmatter metadata ─────
+# Walks entries/ under .claude/knowledge/, extracts frontmatter via yq,
+# outputs a |‑delimited table sorted newest-first by `updated`.
+# Optional positional <pattern> filters entries by case-insensitive substring match.
+cmd_entries_list() {
   [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
-SUBCOMMAND
-        list
+TERTIARY_COMMAND
+    entries list
 
 SYNOPSIS
-        knowledge list [--format|-f json|yaml]
+    knowledge entries list [<pattern>] [-f|--fields|--format <fields,...>]
 
 DESCRIPTION
-        Print INDEX.md contents. Raw data lines by default.
+    List knowledge entry files with selected frontmatter fields.
+    Results are sorted newest to oldest by the 'updated' field.
+    An optional <pattern> filters entries by case-insensitive substring match
+    against entry paths.
+
+ARGUMENTS
+    <pattern>   Bash glob pattern matched against entry paths. Does two passes.
+                Begins by attempting to use your pattern unquoted exactly as provided,
+                                                     (thus affording extglob patterns)
+                 second pass falls back to a case-insensitive glob ( *"<pattern,,>"* ).
 
 OPTIONS
-        --format, -f <fmt>    Output structured format: json or yaml
-                              * Extra args after json are passed to jq.
+          -f,             Comma-separated field list
+    --fields,             (default: category,updated,inspected,path)
+    --format  <f1,f2,...>
 
 EXAMPLES
-        knowledge list
-        knowledge list -f json
-        knowledge list --format=yaml
-        knowledge list -f json '.["app/models/order.rb"]'
+    knowledge entries list
+    knowledge entries list -f path,updated
+    knowledge entries list 'architecture/*something'
+    knowledge entries list gotchas --format path,inspected
 
 INFO
-    return 0; }
-  _require_index
+    return 0
+}
 
-  # Parse --format / -f flag
-  local format=""
+  local fields="updated,inspected,path"
+  local pattern=""
+
   while (($# > 0)); do
     case "$1" in
-    --format=*) format="${1#--format=}"; shift ;;
-    --format|-f) format="${2:?'--format requires a value'}"; shift 2 ;;
-    *) break ;;
+    --format=*|--fields=*) fields="${1#*=}"; shift ;;
+    --format|--fields|-f) fields="${2:?'-f requires a value'}"; shift 2 ;;
+    -*) die "entries list: unknown option '$1'" ;;
+    *)  pattern="${1,,}"; shift ;;
     esac
   done
 
-  if [[ -z "$format" ]]; then
-    grep -v '^$' "$INDEX"
-  else
-    case "$format" in
-    json) {
-        echo '{'
-        grep -v '^$' "$INDEX" | head -n-1 | sed 's|^|\"|g;s|\s[\-][\>]\s|\"\:\ |g;s|\[|\[\"|g;s|[\,]\s*|\"\,\ \"|g;s|\s*\]|\"\]\,|g'
-        grep -v '^$' "$INDEX" | tail -n1 | sed 's|^|\"|g;s|\s[\-][\>]\s|\"\:\ |g;s|\[|\[\"|g;s|[\,]\s*|\"\,\ \"|g;s|\s*\]|\"\]|g'
-        echo '}'
-      } | jq "${@}" $JQARGS
-      # can passthrough remaining args to jq if needed.
-      ;;
-    yaml)
-      while IFS= read -r line; do
-        local src="${line%%[[:space:]]*}"
-        local entries_raw="${line#*\-\>+([[:space:]])}"
-        echo "${src}:"
-        _parse_entries "$entries_raw" | while IFS= read -r entry; do
-          echo "  - ${entry}"
-        done
-      done < <(grep -v '^$' "$INDEX" ) | yq "${@}" $JQARGS
-      # can passthrough remaining args to yq if needed.
-      ;;
-    *)
-      die "list: unknown format '$format' (expected: json, yaml, or omit)"
-    esac
-  fi
+  local entries_dir=".claude/knowledge/entries"
+  [[ -d "$entries_dir" ]] || die "entries directory not found at $entries_dir"
+
+  # Split field names into an array
+  local -a field_list=()
+  IFS=',' read -ra field_list <<< "$fields"
+
+  # Validate field names
+  local -a valid_fields=(path category tags files created updated inspected)
+  for ((f=0;f<${#field_list[@]};f++)); do
+    local match=false
+    for ((v=0;v<${#valid_fields[@]};v++)); do
+      [[ "${field_list[f]}" != "${valid_fields[v]}" ]] || { match=true; break; }
+    done
+    [[ "$match" == true ]] || die "entries list: unknown field '${field_list[f]}' (valid: ${valid_fields[*]})"
+  done
+
+  # Header row
+  local hdr=""
+  for ((f=0;f<${#field_list[@]};f++)); do
+    ((f == 0)) || hdr+="|"
+    hdr+="${field_list[f]}"
+  done
+  echo "$hdr"
+
+  # Collect entry data: one line per entry, with updated field first for sorting
+  local -a rows=()
+  while IFS= read -r entry_file; do
+    local rel_path="${entry_file#${entries_dir}/}"
+
+    # Apply pattern filter if provided
+    if [[ -n "$pattern" ]]; then
+      if [[ "$rel_path" != ${pattern} ]]; then  # allows greater specificity
+        [[ "$pattern" != '*'* ]] || pattern="${pattern:1}"
+        [[ "$pattern" != *'*' ]] || pattern="${pattern:: -1}"
+        [[ "${rel_path,,}" == *"${pattern,,}"* ]] || continue
+      fi
+    fi
+
+    # Extract all frontmatter at once
+    local fm
+    fm=$(yq --front-matter=extract '.' "$entry_file" 2>/dev/null) || continue
+
+    local sort_key
+    sort_key=$(echo "$fm" | yq '.updated // "0000-00-00"' 2>/dev/null)
+
+    # Build the row
+    local row=""
+    for ((f=0;f<${#field_list[@]};f++)); do
+      ((f == 0)) || row+="|"
+      case "${field_list[f]}" in
+      path)      row+="$rel_path" ;;
+      category)  row+=$(echo "$fm" | yq '.category // ""' 2>/dev/null) ;;
+      tags)      row+=$(echo "$fm" | yq '.tags // [] | join(", ")' 2>/dev/null) ;;
+      files)     row+=$(echo "$fm" | yq '.files // [] | join(", ")' 2>/dev/null) ;;
+      created)   row+=$(echo "$fm" | yq '.created // ""' 2>/dev/null) ;;
+      updated)   row+=$(echo "$fm" | yq '.updated // ""' 2>/dev/null) ;;
+      inspected) row+=$(echo "$fm" | yq '.inspected // ""' 2>/dev/null) ;;
+      esac
+    done
+
+    rows[${#rows[@]}]="${sort_key}|${row}"
+  done < <(find "$entries_dir" -name '*.md' -type f 2>/dev/null)
+
+  # Sort by the prepended sort_key (newest first), then strip it
+  for ((r=0;r<${#rows[@]};r++)); do
+    echo "${rows[r]}"
+  done | sort -t'|' -k1,1r | cut -d'|' -f2-
 }
+
+# ── Entries dispatch ──
+cmd_entries() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+SUBCOMMAND
+        entries
+
+SYNOPSIS
+        knowledge entries <TERTIARY_COMMAND> [OPTIONS]
+
+DESCRIPTION
+        Operate on knowledge entry files.
+
+TERTIARY_COMMANDS
+        list [pattern] [-f <fields>]    List entries with frontmatter metadata.
+
+FIELDS
+        path    path to the entry file
+    category    (domain,architecture,gotchas,etc...)
+        tags    subject-matter tags
+       files    related files (subject matter)
+     created    entry.created_at
+     updated    entry.updated_at
+   inspected    entry.inspected_at
+
+INFO
+    return 0; }
+  (($# != 0)) || die "usage: knowledge entries <list> [options]"
+  case "$1" in
+  list) shift; cmd_entries_list "$@" ;;
+  *) die "unknown entries subcommand: '${1}' (try: list)"
+  esac
+}
+
 
 # ── show: lookup by source or entry ────────────────────────────────
 # Given a path, returns the other side of the mapping.
@@ -507,58 +612,14 @@ INFO
   return 1
 }
 
-# ── query: fuzzy lookup by source or entry ────────────────────────
-# Like show, but uses case-insensitive substring matching instead of exact paths.
-# Searches both source paths and entry names, groups results by match side.
-cmd_query() {
-  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
-SUBCOMMAND
-        query
-
-SYNOPSIS
-        knowledge query <pattern>
-
-DESCRIPTION
-        Fuzzy lookup in INDEX.md. Searches source file paths and entry names
-        for case-insensitive substring matches against <pattern>.
-
-        Unlike 'show' (which requires an exact path), 'query' finds all partial
-        matches and prints both sides of the mapping for each hit.
-
-ARGUMENTS
-        <pattern>    Substring to search for (case-insensitive)
-
-EXAMPLES
-        knowledge query order          # finds anything with "order" in path or entry
-        knowledge query lifecycle      # finds entries mentioning "lifecycle"
-        knowledge query \.rb           # grep pattern: all ruby source mappings
-
-INFO
-    return 0; }
-
-  (($# >= 1)) || die "usage: ${BASH_SOURCE[0]##*\/} query <pattern>  ( bash '[['-style patterns. )"
-  _require_index
-
-  local pattern="$1"
-  [[ "$pattern" != '*'* ]] || pattern="${pattern:1}"
-  [[ "$pattern" != *'*' ]] || pattern="${pattern:: -1}"
-
-  grep ' -> ' "$INDEX" | while IFS= read -r line; do
-    line="${line#*\ \-\>\ \[}"
-    line="${line:: -1}"
-    _matching_entries "$pattern" ${line//\,/${IFS}}
-  done | sort -u
-}
-
-# ── Index: sort ────────────────────────────────────────────────────
-# Sorts all data lines alphabetically by source file path.
+# ── sort: sort INDEX.md alphabetically by source path ─────────────
 cmd_sort() {
   [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
-TERTIARY_COMMAND
-        index
+SUBCOMMAND
+        sort
 
 SYNOPSIS
-        knowledge index sort
+        knowledge sort
 
 DESCRIPTION
         Sort all INDEX.md data lines alphabetically by source file path.
@@ -577,34 +638,98 @@ INFO
   fi
 }
 
-# ── Index dispatch (sort only) ──
+# ── Index: list — print index contents ────────────────────────────
+# Prints INDEX.md contents. Raw by default, or as json/yaml with -f.
+cmd_index_list() {
+  [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
+TERTIARY_COMMAND
+        index list
+
+SYNOPSIS
+        knowledge index list [--format|-f json|yaml]
+
+DESCRIPTION
+        Print INDEX.md contents. Raw data lines by default.
+
+OPTIONS
+        --format, -f <fmt>    Output structured format: json or yaml
+                              * Extra args after json are passed to jq.
+
+EXAMPLES
+        knowledge index list
+        knowledge index list -f json
+        knowledge index list --format=yaml
+        knowledge index list -f json '.["app/models/order.rb"]'
+
+INFO
+    return 0; }
+  _require_index
+
+  # Parse --format / -f flag
+  local format=""
+  while (($# > 0)); do
+    case "$1" in
+    --format=*) format="${1#--format=}"; shift ;;
+    --format|-f) format="${2:?'--format requires a value'}"; shift 2 ;;
+    *) break ;;
+    esac
+  done
+
+  if [[ -z "$format" ]]; then
+    grep -v '^$' "$INDEX"
+  else
+    case "$format" in
+    json) {
+        echo '{'
+        grep -v '^$' "$INDEX" | head -n-1 | sed 's|^|\"|g;s|\s[\-][\>]\s|\"\:\ |g;s|\[|\[\"|g;s|[\,]\s*|\"\,\ \"|g;s|\s*\]|\"\]\,|g'
+        grep -v '^$' "$INDEX" | tail -n1 | sed 's|^|\"|g;s|\s[\-][\>]\s|\"\:\ |g;s|\[|\[\"|g;s|[\,]\s*|\"\,\ \"|g;s|\s*\]|\"\]|g'
+        echo '}'
+      } | jq "${@}" $JQARGS
+      ;;
+    yaml)
+      while IFS= read -r line; do
+        local src="${line%%[[:space:]]*}"
+        local entries_raw="${line#*\-\>+([[:space:]])}"
+        echo "${src}:"
+        _parse_entries "$entries_raw" | while IFS= read -r entry; do
+          echo "  - ${entry}"
+        done
+      done < <(grep -v '^$' "$INDEX" ) | yq "${@}" $JQARGS
+      ;;
+    *)
+      die "index list: unknown format '$format' (expected: json, yaml, or omit)"
+    esac
+  fi
+}
+
+# ── Index dispatch ──
 cmd_index() {
   [[ "${1,,}" != @(+(\-)h?(elp)|help) ]] || { $PRESENTER <<'INFO'
 SUBCOMMAND
         index
 
 SYNOPSIS
-        knowledge index <TERTIARY_COMMAND>
+        knowledge index <TERTIARY_COMMAND> [OPTIONS]
 
 DESCRIPTION
-        Interact with INDEX.md via various TERIARY_COMMANDS
+        View INDEX.md contents.
 
 TERTIARY_COMMANDS
-        sort        Sort the INDEX.md (See: 'knowledge index sort --help')
+        list [--format|-f <fmt>]   Print index contents (raw, json, or yaml).
 
 INFO
     return 0; }
-  (($# != 0)) || die "usage: $0 index sort"
+  (($# != 0)) || die "usage: knowledge index <list> [options]"
   case "$1" in
-  sort) cmd_sort ;;
-  *) die "unknown index subcommand: '${1}' (try: link, unlink, purge, rekey, list)"
+  list) shift; cmd_index_list "$@" ;;
+  *) die "unknown index subcommand: '${1}' (try: list)"
   esac
 }
 
 
 # ── Dispatch ──
 case "$1" in
-init|hooks|link|unlink|list|show|query|rekey|purge|index) cmd_${1} "${@:2}" ;;
+init|hooks|link|unlink|show|sort|rekey|purge|index|entries) cmd_${1} "${@:2}" ;;
 --verify-settings) exec "$SOURCE_DIR/verify-settings.sh" "${@:2}" ;;
 --reinstall-hooks) exec "$SOURCE_DIR/init.sh" --hooks-only "${@:2}" ;;
 *) _usage 1

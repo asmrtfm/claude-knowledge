@@ -1,7 +1,7 @@
 ---
 name: knowledge
 description: Capture, query, and maintain project knowledge. Use to record architectural discoveries, gotchas, and domain concepts that are not obvious from reading the code.
-argument-hint: capture | maintain | inspect | <search query>
+argument-hint: capture | maintain | inspect
 ---
 
 !`${CLAUDE_SKILL_DIR}/load-env.sh`
@@ -48,6 +48,5 @@ Parse $ARGUMENTS:
 - If empty or `capture`: enter **Capture Mode** → read `skills/capture/SKILL.md`
 - If `maintain`: enter **Maintain Mode** → read `skills/maintain/SKILL.md`
 - If `inspect`: enter **Inspect Mode** → read `skills/inspect/SKILL.md`
-- Anything else: treat as a search query → enter **Query Mode** → read `skills/query/SKILL.md`
 
 $ARGUMENTS

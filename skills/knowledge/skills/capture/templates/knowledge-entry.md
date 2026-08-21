@@ -36,8 +36,8 @@ knowledge link <source> <entry>           # link a source file to an entry
 knowledge unlink <source> <entry>         # unlink
 knowledge purge <entry>                   # remove entry from all sources
 knowledge rekey <old_path> <new_path>     # update after a file move
-knowledge list [-f json|yaml]             # view the index
-knowledge index sort                      # sort index alphabetically
+knowledge index list [-f json|yaml]       # view the index
+knowledge sort                            # sort index alphabetically
 ```
 
 

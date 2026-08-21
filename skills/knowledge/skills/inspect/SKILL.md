@@ -8,21 +8,14 @@ name: inspect
 
 Review knowledge entries for validity and assess whether they point to behavior
 that should have test coverage. Produces an inspection log with actionable
-recommendations.
+recommendations. All work is done inline, one entry at a time, with the user in the loop.
+
 
 ### Selection
 
-1. Scan all entries under `entries/` and extract frontmatter using `yq`:
-   ```bash
-   for f in $(find entries/ -name '*.md' -type f); do
-     category=$(echo "$f" | cut -d/ -f2)
-     inspected=$(yq --front-matter=extract '.inspected' "$f" 2>/dev/null)
-     updated=$(yq --front-matter=extract '.updated' "$f" 2>/dev/null)
-     echo "$category|$inspected|$updated|$f"
-   done
-   ```
+1. Run `knowledge entries list -f path,category,updated,inspected` to get all entries with their metadata.
 2. Classify each entry:
-   - **uninspected**: `inspected` is null/missing
+   - **uninspected**: `inspected` is empty/missing
    - **stale-entry**: `inspected` is literally `stale`
    - **needs-reinspection**: `updated > inspected` (date comparison)
    - **current**: `inspected >= updated` — skip these
@@ -36,17 +29,21 @@ recommendations.
 4. After category selection, present a multi-select entry menu within that category.
    Label each entry with its status.
 
+
 ### Inspection
 
-Launch a subagent (Agent tool) for the selected entries. The subagent prompt must include:
-- The full path to each selected entry
-- Instruction to read each entry and all files in its `files:` frontmatter field
-- The inspection criteria below
-- A 90K context budget note: keep source file reads targeted — read only what's needed to verify the entry and assess test coverage
+Process selected entries **one at a time**, in order. For each entry:
+
+1. Read the entry file.
+2. Read each file listed in the entry's `files:` frontmatter. Only read what's needed
+   to verify the entry's claims — don't dump entire large files.
+3. Evaluate against the inspection criteria below.
+4. Present findings to the user and wait for confirmation before stamping frontmatter.
+5. Append findings to the inspection log.
+6. Move on to the next entry only after the current one is resolved.
+
 
 #### Inspection Criteria
-
-For each entry, the subagent evaluates:
 
 1. **Validity**: Do the referenced files still exist? Does the entry's content match
    what the code actually does? If not, the entry is stale.
@@ -72,14 +69,15 @@ For each entry, the subagent evaluates:
    tests should be written — specific enough to act on, referencing the entry's
    knowledge as the specification.
 
-#### Subagent Output
 
-The subagent writes an inspection log to:
+### Inspection Log
+
+Create the log file at the start of the inspection run:
 ```
 .claude/knowledge/inspections/<YYYYMMDD>_<HHMMSS>.md
 ```
 
-Format:
+Append each entry's findings as they're completed:
 ```markdown
 # Inspection Log — <YYYY-MM-DD HH:MM:SS>
 
@@ -94,13 +92,13 @@ Format:
 ## <next entry...>
 ```
 
+
 ### Post-Inspection
 
-After the subagent returns, the orchestrator stamps each inspected entry's frontmatter:
+After the user confirms each entry's findings, stamp its frontmatter:
 - Valid entries: set `inspected: <YYYY-MM-DD>`
 - Stale entries: set `inspected: stale`
 
-Use `yq` to update the frontmatter in place:
 ```bash
 yq --front-matter=process '.inspected = "<value>"' -i "$entry_path"
 ```

@@ -83,6 +83,12 @@ else
 fi
 
 
+# Try not to false-flag'm
+#
+printf "$cmd" | grep -v "^#\s*" | grep -vE "\.(find|grep)" | grep -Esq "(^|[[:space:];|&(])(find|grep)[[:space:]]" >/dev/null 2>&1 || exit 0
+
+
+
 # Only gate commands that invoke a recursive grep (any variant: grep, egrep, fgrep, ugrep, rgrep)
 #                                                  ( intentionally avoids matching on  ast-grep )
 _is_recursive() {
@@ -91,6 +97,7 @@ _is_recursive() {
      "$*" == @('rg'|'ripgrep')* \
   ]]
 }
+
 
 # Only intercept search commands
 case "$cmd" in
@@ -163,7 +170,7 @@ ignore_str=""
 for ((d=0;d<${#IGNORE_DIRS[@]};d++)); do
   if [[ "$cmd" != *"${IGNORE_DIRS[d]}"* ]]; then
     case "$Cmd" in
-    "grep") ignore_str+="--exclude-dir=${IGNORE_DIRS[d]} " ;;
+    "grep") ignore_str+="--exclude-dir='${IGNORE_DIRS[d]}' " ;;
     "find") ignore_str+="-not -path '*${IGNORE_DIRS[d]}*' " ;;
     *) continue
     esac
