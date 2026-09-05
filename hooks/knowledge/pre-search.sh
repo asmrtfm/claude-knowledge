@@ -299,7 +299,19 @@ else
 fi
 
 if [[ ! -s "${to}.list" ]]; then
-  no_dice
+  # Log has content but list is empty → output wasn't file paths (e.g. find ... | wc -l)
+  # Replay what we captured instead of clobbering with `false`
+  if [[ -s "${to}.log" ]]; then
+    printf '%s' "$Input" | jq --arg nc "cat '${to}.log'" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        updatedInput: (.tool_input | .command = $nc)
+      }
+    }'
+  else
+    no_dice
+  fi
   exit 0
 fi
 
